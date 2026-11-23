@@ -27,10 +27,26 @@ jobs:
 
       # Always the wrapper: it pins Gradle 8.9, which AGP 8.7.3 requires.
       - name: Assemble library and example app
-        run: ./gradlew :soniq-base:assembleDebug :examples:youtube-music:assembleDebug --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :soniq-base:assembleDebug :examples:youtube-music:assembleDebug \
+              --no-daemon --stacktrace 2>&1 | tee build.log
 
       - name: Run JVM unit tests
-        run: ./gradlew :soniq-base:testDebugUnitTest --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :soniq-base:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee test.log
+
+      # Job logs are not reachable from every environment that maintains this
+      # repository; repeat the error summary as annotations so it is visible
+      # through the checks API.
+      - name: Surface Gradle errors as annotations
+        if: failure()
+        run: |
+          {
+            grep -hE '^e: |What went wrong|Execution failed|Caused by|error:|FAILURE:' build.log test.log 2>/dev/null || true
+            grep -h -A12 'What went wrong' build.log test.log 2>/dev/null || true
+          } | head -60 | while IFS= read -r line; do echo "::error title=gradle::$line"; done
 
       - name: Upload example APK
         uses: actions/upload-artifact@v7
