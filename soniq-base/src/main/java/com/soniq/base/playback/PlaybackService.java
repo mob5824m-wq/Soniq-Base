@@ -68,6 +68,20 @@ public final class PlaybackService extends Service {
     public static final String ACTION_MEDIA_BUTTON = "com.soniq.base.action.MEDIA_BUTTON";
 
     public static final int NOTIFICATION_ID = 4101;
+
+    /**
+     * Session token of the running service, for
+     * {@link SoniqMediaBrowserService}. Null until playback has been started
+     * once in this process — a car client then browses without transport until
+     * the app opens, which is the platform's normal cold-start behaviour.
+     */
+    private static volatile MediaSession.Token sharedSessionToken;
+
+    /** The live media session token, or null when nothing has played yet. */
+    public static MediaSession.Token sessionToken() {
+        return sharedSessionToken;
+    }
+
     private static final String CHANNEL_ID = "soniq_playback";
     private static final String WAKE_LOCK_TAG = "SoniqMusic:Playback";
     private static final String WIFI_LOCK_TAG = "SoniqMusic:Stream";
@@ -131,6 +145,22 @@ public final class PlaybackService extends Service {
     private long sleepEndAt;
     private Runnable sleepRunnable;
 
+    /* ---- crossfade / gapless / resume (backbone; see docs/WIDGETS.md) ---- */
+    /** Pure decisions for crossfade, gapless and resume. */
+    private final PlaybackEngine engine = new PlaybackEngine();
+    /** Persists the queue + resume point across cold starts. */
+    private PlaybackSession sessionStore;
+    /** The prepared next track, when gapless or crossfade is on. */
+    private MediaPlayer nextPlayer;
+    private String nextPlayerIdentity = "";
+    private Future<?> prebufferTask;
+    private boolean crossfading;
+    private boolean endingHandled;
+    private Runnable fadeRunnable;
+    /** Last identity pushed to the widget, so we only touch RemoteViews on change. */
+    private String widgetIdentity = "";
+    private boolean widgetPlaying;
+
     private ScrobbleQueue scrobbles;
     private boolean tickerRunning;
     private long lastTickRealtime;
@@ -155,6 +185,8 @@ public final class PlaybackService extends Service {
         library = new Library(this);
         settings = new Settings(this);
         eqPreset = Math.max(0, settings.equalizerPreset());
+        sessionStore = new PlaybackSession(this);
+        applyEngineSettings();
         notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         createNotificationChannel();
@@ -221,12 +253,16 @@ public final class PlaybackService extends Service {
             resolveTask = null;
         }
         unregisterConnectivityCallback();
+        saveSession();
+        stopFade();
+        releaseNextPlayer();
         releasePlayer();
         releaseLocks();
         abandonFocus();
         if (session != null) {
             session.release();
             session = null;
+            sharedSessionToken = null;
         }
         try {
             unregisterReceiver(noisyReceiver);
@@ -245,6 +281,27 @@ public final class PlaybackService extends Service {
         }
         io.shutdownNow();
         super.onDestroy();
+    }
+
+    /** Re-reads crossfade/gapless from Settings (called at start and on change). */
+    public void applyEngineSettings() {
+        if (settings == null) {
+            return;
+        }
+        engine.setCrossfadeSeconds(settings.crossfadeSeconds());
+        engine.setGaplessEnabled(settings.gaplessEnabled());
+        engine.setResumeEnabled(settings.resumeEnabled());
+        if (!engine.needsPrebuffer()) {
+            releaseNextPlayer();
+        } else {
+            // Turning a mode on mid-track should prebuffer immediately.
+            main.post(new Runnable() {
+                @Override
+                public void run() {
+                    maybePrebuffer();
+                }
+            });
+        }
     }
 
     private void createNotificationChannel() {
@@ -349,6 +406,7 @@ public final class PlaybackService extends Service {
             }
         });
         session.setActive(true);
+        sharedSessionToken = session.getSessionToken();
     }
 
     private void handleMediaButton(Intent intent) {
@@ -524,6 +582,7 @@ public final class PlaybackService extends Service {
         if (scrobbles != null) {
             scrobbles.playbackPaused();
         }
+        saveSession();
         if (resolving) {
             status = "Paused · waiting for the stream";
         }
@@ -548,6 +607,10 @@ public final class PlaybackService extends Service {
         outputWarning = "";
         releasePlayer();
         queue.clear();
+        if (sessionStore != null) {
+            sessionStore.clearQueue();
+            sessionStore.clearResumePoint();
+        }
         abandonFocus();
         releaseLocks();
         updatePlaybackState();
@@ -911,6 +974,8 @@ public final class PlaybackService extends Service {
         playbackError = false;
         buffering = false;
         outputWarning = "";
+        endingHandled = false;
+        crossfading = false;
         final MediaItem item = queue.current();
         if (item == null) {
             status = "";
@@ -941,6 +1006,16 @@ public final class PlaybackService extends Service {
                 }
             });
             return;
+        }
+
+        if (settings != null && settings.wifiOnly()) {
+            String blocked = new com.soniq.base.data.NetworkPolicy(true)
+                    .blockedReason(NetworkStatus.currentType(this), false);
+            if (blocked.length() > 0) {
+                failCurrent(new IOException(blocked
+                        + ". Connect to Wi-Fi or turn Wi-Fi only off in Settings."));
+                return;
+            }
         }
 
         final MediaItem toResolve = item;
@@ -1034,6 +1109,160 @@ public final class PlaybackService extends Service {
         return fixed;
     }
 
+    /* ======================================== crossfade / gapless / prebuffer */
+
+    /**
+     * Resolves and prepares the next queue item so gapless or a crossfade can
+     * take over without a silent gap. Called once the current track is audible.
+     */
+    private void maybePrebuffer() {
+        final MediaItem currentItem = queue.current();
+        if (currentItem == null || !engine.shouldPrebuffer(currentItem.identity())) {
+            return;
+        }
+        if (nextPlayer != null || prebufferTask != null) {
+            return;
+        }
+        if (player == null || !prepared || playbackError) {
+            return;
+        }
+        if (queue.repeatMode() == PlaybackQueue.REPEAT_ONE) {
+            // Repeat-one means the same file again: no second decoder needed.
+            return;
+        }
+        // Walk the *play order*, not the item list, so shuffle is respected.
+        List<MediaItem> items = queue.ordered();
+        if (items.size() < 2) {
+            return;
+        }
+        int index = -1;
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i).identity().equals(currentItem.identity())) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            return;
+        }
+        int nextIndex = index + 1;
+        if (nextIndex >= items.size()) {
+            if (queue.repeatMode() != PlaybackQueue.REPEAT_ALL) {
+                return;
+            }
+            nextIndex = 0;
+        }
+        final MediaItem nextItem = items.get(nextIndex);
+        if (nextItem == null || nextItem.identity().equals(currentItem.identity())) {
+            return;
+        }
+        final int request = generation;
+        prebufferTask = io.submit(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final MediaPlayer preparedNext = nextItem.localUri.length() > 0
+                            ? prepareLocal(nextItem) : prepareStream(nextItem);
+                    main.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (request != generation) {
+                                releaseQuietly(preparedNext);
+                                return;
+                            }
+                            prebufferTask = null;
+                            if (preparedNext == null) {
+                                return;
+                            }
+                            releaseNextPlayer();
+                            nextPlayer = preparedNext;
+                            nextPlayerIdentity = nextItem.identity();
+                            engine.onBufferPrepared(nextPlayerIdentity);
+                        }
+                    });
+                } catch (final Exception error) {
+                    main.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (request == generation) {
+                                prebufferTask = null;
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    /** Builds a MediaPlayer for a local file, prepared synchronously. */
+    private MediaPlayer prepareLocal(MediaItem item) throws java.io.IOException {
+        MediaPlayer mediaPlayer = new MediaPlayer();
+        try {
+            mediaPlayer.setAudioAttributes(audioAttributes());
+            mediaPlayer.setDataSource(this, Uri.parse(item.localUri));
+            mediaPlayer.prepare();
+            return mediaPlayer;
+        } catch (java.io.IOException error) {
+            releaseQuietly(mediaPlayer);
+            throw error;
+        } catch (RuntimeException error) {
+            releaseQuietly(mediaPlayer);
+            throw new java.io.IOException("Could not prepare " + item.title, error);
+        }
+    }
+
+    /** Resolves a stream for the next item and prepares it, synchronously. */
+    private MediaPlayer prepareStream(MediaItem item) throws java.io.IOException {
+        StreamSource track = provider.resolve(item);
+        if (track == null || !track.hasStream()) {
+            throw new java.io.IOException("No playable stream for " + item.title);
+        }
+        MediaPlayer mediaPlayer = new MediaPlayer();
+        try {
+            mediaPlayer.setAudioAttributes(audioAttributes());
+            if (track.hls) {
+                mediaPlayer.setDataSource(track.url);
+            } else {
+                mediaPlayer.setDataSource(this, Uri.parse(track.url), track.headers);
+            }
+            mediaPlayer.prepare();
+            return mediaPlayer;
+        } catch (java.io.IOException error) {
+            releaseQuietly(mediaPlayer);
+            throw error;
+        } catch (RuntimeException error) {
+            releaseQuietly(mediaPlayer);
+            throw new java.io.IOException("Could not prepare " + item.title, error);
+        }
+    }
+
+    private static void releaseQuietly(MediaPlayer mediaPlayer) {
+        if (mediaPlayer == null) {
+            return;
+        }
+        try {
+            mediaPlayer.reset();
+        } catch (Exception ignored) {
+        }
+        try {
+            mediaPlayer.release();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void releaseNextPlayer() {
+        if (prebufferTask != null) {
+            prebufferTask.cancel(true);
+            prebufferTask = null;
+        }
+        if (nextPlayer != null) {
+            releaseQuietly(nextPlayer);
+            nextPlayer = null;
+        }
+        nextPlayerIdentity = "";
+        engine.onBufferReleased();
+    }
+
     private void startStream(MediaItem item, StreamSource track, int request) {
         if (track == null || !track.hasStream()) {
             failCurrent(new IOException("No playable audio stream was returned."));
@@ -1082,6 +1311,13 @@ public final class PlaybackService extends Service {
                 playbackError = false;
                 status = "";
                 applyEqualizerPreset();
+                // Prepare the next track early so gapless/crossfade can take over.
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        maybePrebuffer();
+                    }
+                });
                 if (playWhenReady) {
                     if (requestFocus()) {
                         startPlaybackNow(mediaPlayer);
@@ -1207,6 +1443,10 @@ public final class PlaybackService extends Service {
             long delta = lastTickRealtime > 0L ? now - lastTickRealtime : 0L;
             lastTickRealtime = now;
             scrobbles.playbackTick(queue.current(), delta, getDuration());
+            // Crossfade timing lives on this same 1 s heartbeat: no extra timer.
+            checkCrossfade();
+            // Resume point is rewritten at most once a second, cheap and always current.
+            rememberResumePoint();
             main.postDelayed(this, 1000L);
         }
     };
@@ -1250,12 +1490,96 @@ public final class PlaybackService extends Service {
                 player.start();
                 position.seekTo(0, SystemClock.elapsedRealtime());
                 position.setPlaying(true, SystemClock.elapsedRealtime());
+                endingHandled = false;
                 scrobbles.trackChanged(queue.current());
                 scrobbles.playbackStarted(queue.current());
                 return;
             } catch (Exception ignored) {
             }
         }
+        if (handOffToPreparedNext()) {
+            return;
+        }
+        advanceAfterEnd();
+    }
+
+    /**
+     * Gapless: swap in the prepared next player at the exact end of the current
+     * track, with no silence and no re-resolution. Falls back to a normal
+     * advance when nothing was prepared (network hiccup, provider change).
+     */
+    private boolean handOffToPreparedNext() {
+        if (nextPlayer == null) {
+            return false;
+        }
+        int nextIndex = resolveNextIndex();
+        if (nextIndex < 0) {
+            releaseNextPlayer();
+            return false;
+        }
+        MediaItem nextItem = queue.ordered().get(nextIndex);
+        if (nextItem == null || !engine.isBufferReady(nextItem.identity(), true)) {
+            releaseNextPlayer();
+            return false;
+        }
+        MediaPlayer previous = player;
+        player = nextPlayer;
+        nextPlayer = null;
+        nextPlayerIdentity = "";
+        engine.onBufferReleased();
+        releaseQuietly(previous);
+        queue.playAt(queue.indexOf(nextItem));
+        prepared = true;
+        resolving = false;
+        buffering = false;
+        playbackError = false;
+        endingHandled = false;
+        status = "";
+        try {
+            player.setVolume(1f, 1f);
+            player.start();
+        } catch (Exception error) {
+            failCurrent(error);
+            return true;
+        }
+        long now = SystemClock.elapsedRealtime();
+        position.seekTo(0, now);
+        position.setPlaying(true, now);
+        attachPlayerListeners(player, generation);
+        applyEqualizerPreset();
+        if (scrobbles != null) {
+            scrobbles.trackChanged(queue.current());
+            scrobbles.playbackStarted(queue.current());
+        }
+        updatePlaybackState();
+        updateMetadata();
+        updateNotification();
+        notifyChanged();
+        maybePrebuffer();
+        return true;
+    }
+
+    /** Index in the play order of the item after the current one, respecting repeat. */
+    private int resolveNextIndex() {
+        List<MediaItem> items = queue.ordered();
+        MediaItem currentItem = queue.current();
+        if (currentItem == null || items.isEmpty()) {
+            return -1;
+        }
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i).identity().equals(currentItem.identity())) {
+                int next = i + 1;
+                if (next < items.size()) {
+                    return next;
+                }
+                return queue.repeatMode() == PlaybackQueue.REPEAT_ALL ? 0 : -1;
+            }
+        }
+        return -1;
+    }
+
+    /** The pre-existing "track ended, move on" path (now shared with the crossfade). */
+    private void advanceAfterEnd() {
         MediaItem nextItem = queue.next(false);
         if (nextItem == null) {
             playWhenReady = false;
@@ -1263,6 +1587,8 @@ public final class PlaybackService extends Service {
                 scrobbles.playbackPaused();
             }
             status = "Queue finished";
+            sessionStore.clearQueue();
+            sessionStore.clearResumePoint();
             releaseLocks();
             updatePlaybackState();
             updateNotification();
@@ -1270,6 +1596,127 @@ public final class PlaybackService extends Service {
             return;
         }
         prepareCurrent();
+    }
+
+    /* ============================================================= crossfade */
+
+    /**
+     * Starts the fade-out early and brings the prepared next track in
+     * underneath. Only runs when a next player is actually ready: a half
+     * crossfade (silence, then a gap) is worse than no crossfade.
+     */
+    private void checkCrossfade() {
+        if (!engine.isCrossfadeEnabled() || crossfading || endingHandled) {
+            return;
+        }
+        if (player == null || !prepared || nextPlayer == null) {
+            return;
+        }
+        int duration = getDuration();
+        int fadeMs = engine.fadeMillis();
+        int startAt = engine.crossfadeStartPosition(duration);
+        if (startAt < 0 || getPosition() < startAt) {
+            return;
+        }
+        int nextIndex = resolveNextIndex();
+        if (nextIndex < 0) {
+            return;
+        }
+        MediaItem nextItem = queue.ordered().get(nextIndex);
+        if (nextItem == null || !engine.isBufferReady(nextItem.identity(), true)) {
+            return;
+        }
+        crossfading = true;
+        final MediaPlayer outgoing = player;
+        final MediaPlayer incoming = nextPlayer;
+        nextPlayer = null;
+        nextPlayerIdentity = "";
+        engine.onBufferReleased();
+        player = incoming;
+        prepared = true;
+        resolving = false;
+        buffering = false;
+        endingHandled = true;
+        try {
+            incoming.setVolume(0f, 0f);
+            incoming.start();
+        } catch (Exception error) {
+            // Put the world back the way we found it and let the track end normally.
+            crossfading = false;
+            endingHandled = false;
+            nextPlayer = incoming;
+            nextPlayerIdentity = nextItem.identity();
+            engine.onBufferPrepared(nextPlayerIdentity);
+            player = outgoing;
+            return;
+        }
+        queue.playAt(queue.indexOf(nextItem));
+        long now = SystemClock.elapsedRealtime();
+        position.seekTo(0, now);
+        position.setPlaying(true, now);
+        attachPlayerListeners(incoming, generation);
+        applyEqualizerPreset();
+        if (scrobbles != null) {
+            scrobbles.trackChanged(queue.current());
+            scrobbles.playbackStarted(queue.current());
+        }
+        updateMetadata();
+        startFade(outgoing, incoming, fadeMs, now);
+        updateNotification();
+        notifyChanged();
+    }
+
+    /** Ramps outgoing volume 1→0 and incoming 0→1 over the fade window. */
+    private void startFade(final MediaPlayer outgoing, final MediaPlayer incoming,
+                           final int fadeMs, final long startedAt) {
+        stopFade();
+        fadeRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (!crossfading || player != incoming) {
+                    stopFade();
+                    return;
+                }
+                long elapsed = SystemClock.elapsedRealtime() - startedAt;
+                float in = PlaybackEngine.fadeInVolume(elapsed, fadeMs);
+                float out = 1f - in;
+                try {
+                    incoming.setVolume(in, in);
+                } catch (Exception ignored) {
+                }
+                try {
+                    outgoing.setVolume(out, out);
+                } catch (Exception ignored) {
+                }
+                if (elapsed >= fadeMs) {
+                    finishFade(outgoing, incoming);
+                    return;
+                }
+                main.postDelayed(this, PlaybackEngine.FADE_TICK_MS);
+            }
+        };
+        main.post(fadeRunnable);
+    }
+
+    private void finishFade(MediaPlayer outgoing, MediaPlayer incoming) {
+        stopFade();
+        crossfading = false;
+        try {
+            incoming.setVolume(1f, 1f);
+        } catch (Exception ignored) {
+        }
+        releaseQuietly(outgoing);
+        updatePlaybackState();
+        updateNotification();
+        notifyChanged();
+        maybePrebuffer();
+    }
+
+    private void stopFade() {
+        if (fadeRunnable != null) {
+            main.removeCallbacks(fadeRunnable);
+            fadeRunnable = null;
+        }
     }
 
     private void failCurrent(Exception error) {
@@ -1297,8 +1744,72 @@ public final class PlaybackService extends Service {
         notifyChanged();
     }
 
+    /**
+     * Writes the current track + position to {@link PlaybackSession}, the single
+     * source for the Home screen's "Continue listening" card.
+     */
+    private void rememberResumePoint() {
+        if (sessionStore == null) {
+            return;
+        }
+        MediaItem item = queue.current();
+        if (item == null) {
+            return;
+        }
+        // Live streams have no meaningful position to resume.
+        if (item.isLive) {
+            sessionStore.clearResumePoint();
+            return;
+        }
+        ResumePoint point = ResumePoint.of(item, getPosition(), getDuration(),
+                System.currentTimeMillis());
+        sessionStore.saveResumePoint(point);
+    }
+
+    /** Persists the queue and position; called on pause, track change and stop. */
+    private void saveSession() {
+        if (sessionStore == null) {
+            return;
+        }
+        List<MediaItem> items = queue.ordered();
+        if (items.isEmpty()) {
+            sessionStore.clearQueue();
+            return;
+        }
+        sessionStore.saveQueue(items, queue.position(), getPosition());
+        rememberResumePoint();
+    }
+
+    /** Replaces the queue with a saved one (used by "Continue listening"). */
+    public void restoreQueue() {
+        if (sessionStore == null || !sessionStore.hasQueue()) {
+            return;
+        }
+        List<MediaItem> items = sessionStore.queue();
+        if (items.isEmpty()) {
+            sessionStore.clearQueue();
+            return;
+        }
+        play(items, Math.min(sessionStore.index(), items.size() - 1));
+        final int resumeAt = sessionStore.positionMs();
+        if (resumeAt > 0) {
+            main.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (prepared && !playbackError) {
+                        seekTo(resumeAt);
+                    }
+                }
+            }, 600L);
+        }
+    }
+
     private void releasePlayer() {
         stopTicker();
+        stopFade();
+        crossfading = false;
+        endingHandled = false;
+        releaseNextPlayer();
         buffering = false;
         outputWarning = "";
         position.reset();
@@ -1458,7 +1969,9 @@ public final class PlaybackService extends Service {
         int state;
         if (playbackError) {
             state = PlaybackState.STATE_ERROR;
-        } else if (playWhenReady && (resolving || buffering)) {
+        } else if (playWhenReady && (resolving || buffering) && !crossfading) {
+            // During a crossfade the outgoing track is still audible: never claim
+            // to be buffering while the listener hears music.
             state = PlaybackState.STATE_BUFFERING;
         } else if (isPlaying()) {
             state = PlaybackState.STATE_PLAYING;
@@ -1655,6 +2168,22 @@ public final class PlaybackService extends Service {
 
     public void removeListener(Listener listener) {
         listeners.remove(listener);
+    }
+
+    /** Pushes the now-playing state to the home-screen widget when it changed. */
+    private void syncWidget() {
+        MediaItem item = queue.current();
+        String identity = item == null ? "" : item.identity();
+        boolean playing = isPlaying();
+        if (identity.equals(widgetIdentity) && playing == widgetPlaying) {
+            return;
+        }
+        widgetIdentity = identity;
+        widgetPlaying = playing;
+        if (settings != null && !settings.widgetEnabled()) {
+            return;
+        }
+        SoniqWidgetProvider.publish(this, item, playing, playing || item != null ? artwork : null);
     }
 
     private void notifyChanged() {

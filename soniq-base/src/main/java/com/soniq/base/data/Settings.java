@@ -21,6 +21,19 @@ public final class Settings {
     private static final String KEY_SCROBBLE_TOKEN = "scrobble_token";
     private static final String KEY_SCROBBLE_USER = "scrobble_user_name";
     private static final String KEY_SCROBBLE_NOW_PLAYING = "scrobble_announce_now_playing";
+    private static final String KEY_INSIGHTS_USER = "insights_user_name";
+    private static final String KEY_CROSSFADE = "crossfade_seconds";
+    private static final String KEY_GAPLESS = "gapless_enabled";
+    private static final String KEY_WIFI_ONLY = "wifi_only";
+    private static final String KEY_RESUME = "resume_enabled";
+    private static final String KEY_SORT = "library_sort";
+    private static final String KEY_WIDGET = "widget_enabled";
+
+    /** Library ordering choices, shared by the Library and playlist screens. */
+    public static final int SORT_RECENT = 0;
+    public static final int SORT_TITLE = 1;
+    public static final int SORT_ARTIST = 2;
+    public static final int SORT_DURATION = 3;
 
     private final SharedPreferences prefs;
 
@@ -100,6 +113,105 @@ public final class Settings {
 
     public void setAnnounceNowPlaying(boolean announce) {
         prefs.edit().putBoolean(KEY_SCROBBLE_NOW_PLAYING, announce).apply();
+    }
+
+    /**
+     * ListenBrainz user whose public statistics "Year in review" reads. Falls
+     * back to the scrobbling user name, so a listener normally needs to set
+     * nothing; anyone can point the recap at another public profile.
+     */
+    public String insightsUserName() {
+        String value = prefs.getString(KEY_INSIGHTS_USER, "");
+        return value == null ? "" : value.trim();
+    }
+
+    public void setInsightsUserName(String name) {
+        prefs.edit().putString(KEY_INSIGHTS_USER,
+                name == null ? "" : name.trim()).apply();
+    }
+
+    /** The ListenBrainz user the recap reads: the override, else the scrobbling user. */
+    public String recapUserName() {
+        String override = insightsUserName();
+        return override.length() > 0 ? override : scrobbleUserName();
+    }
+
+    /* =========================================================== Playback extras */
+
+    /**
+     * Crossfade length in seconds, {@code 0..12}; 0 means off. The service
+     * clamps again on read, so a hand-edited preference cannot break playback.
+     */
+    public int crossfadeSeconds() {
+        return Math.max(0, Math.min(12, prefs.getInt(KEY_CROSSFADE, 0)));
+    }
+
+    public void setCrossfadeSeconds(int seconds) {
+        prefs.edit().putInt(KEY_CROSSFADE, Math.max(0, Math.min(12, seconds))).apply();
+    }
+
+    /** Gapless hand-off between consecutive tracks (off by default: it costs a second decoder). */
+    public boolean gaplessEnabled() {
+        return prefs.getBoolean(KEY_GAPLESS, false);
+    }
+
+    public void setGaplessEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_GAPLESS, enabled).apply();
+    }
+
+    /**
+     * "Wi-Fi only": no downloads and no streaming on metered connections.
+     * Off by default because a listener on unlimited data should not have to
+     * discover a switch before music works.
+     */
+    public boolean wifiOnly() {
+        return prefs.getBoolean(KEY_WIFI_ONLY, false);
+    }
+
+    public void setWifiOnly(boolean wifiOnly) {
+        prefs.edit().putBoolean(KEY_WIFI_ONLY, wifiOnly).apply();
+    }
+
+    /**
+     * Whether the framework widget publishes playback state. Off only when a
+     * host app ships its own widget and does not want two updating.
+     */
+    public boolean widgetEnabled() {
+        return prefs.getBoolean(KEY_WIDGET, true);
+    }
+
+    public void setWidgetEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_WIDGET, enabled).apply();
+    }
+
+    /** Whether the Home screen offers "Continue listening". On by default. */
+    public boolean resumeEnabled() {
+        return prefs.getBoolean(KEY_RESUME, true);
+    }
+
+    public void setResumeEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_RESUME, enabled).apply();
+    }
+
+    public int librarySort() {
+        return Math.max(0, Math.min(3, prefs.getInt(KEY_SORT, SORT_RECENT)));
+    }
+
+    public void setLibrarySort(int sort) {
+        prefs.edit().putInt(KEY_SORT, Math.max(0, Math.min(3, sort))).apply();
+    }
+
+    public String librarySortLabel() {
+        switch (librarySort()) {
+            case SORT_TITLE:
+                return "Title (A–Z)";
+            case SORT_ARTIST:
+                return "Artist (A–Z)";
+            case SORT_DURATION:
+                return "Duration (shortest first)";
+            default:
+                return "Recently played";
+        }
     }
 
     /** True when scrobbling is switched on and a token is present. */

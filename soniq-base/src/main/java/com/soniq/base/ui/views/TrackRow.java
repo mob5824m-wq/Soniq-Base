@@ -9,6 +9,7 @@ import android.widget.TextView;
 
 import com.soniq.base.R;
 import com.soniq.base.model.MediaItem;
+import com.soniq.base.ui.A11y;
 import com.soniq.base.ui.NetworkImage;
 import com.soniq.base.ui.Theme;
 import com.soniq.base.ui.Ui;
@@ -38,6 +39,9 @@ public final class TrackRow extends LinearLayout {
         if (showArt) {
             NetworkImage art = new NetworkImage(context);
             art.setRadiusDp(8f);
+            // The row itself announces title/artist; artwork describes itself.
+            A11y.label(art, item.title.length() > 0
+                    ? "Artwork for " + item.title : "Album artwork");
             int size = Ui.dp(context, 48);
             LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(size, size);
             artParams.rightMargin = Ui.dp(context, 12);
@@ -87,6 +91,23 @@ public final class TrackRow extends LinearLayout {
                 }
             }
         });
+        // One focus stop per row: "Title, artist, 3:42" instead of five swipes.
+        StringBuilder announcement = new StringBuilder(item.title);
+        if (item.author.length() > 0) {
+            announcement.append(", ").append(item.author);
+        }
+        if (item.durationText.length() > 0) {
+            announcement.append(", ").append(item.durationText);
+        }
+        if (active) {
+            announcement.append(" (now playing)");
+        }
+        A11y.singleAnnouncement(this, announcement.toString());
+        // Keep the overflow button reachable: it is the one interactive child.
+        View moreButton = getChildAt(getChildCount() - 1);
+        if (moreButton != null) {
+            moreButton.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        }
         setOnLongClickListener(new OnLongClickListener() {
             @Override
             public boolean onLongClick(View view) {

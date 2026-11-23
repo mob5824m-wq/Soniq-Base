@@ -12,8 +12,10 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.soniq.base.R;
+import com.soniq.base.data.SearchHistory;
 import com.soniq.base.model.MediaItem;
 import com.soniq.base.provider.MusicProvider;
+import com.soniq.base.ui.A11y;
 import com.soniq.base.ui.Host;
 import com.soniq.base.ui.Theme;
 import com.soniq.base.ui.Ui;
@@ -44,6 +46,8 @@ public final class SearchScreen extends Screen {
     private TextView statusView;
     private Chip[] chips;
     private EditText input;
+    private LinearLayout historyRow;
+    private SearchHistory history;
 
     public SearchScreen(Host host) {
         super(host);
@@ -127,6 +131,10 @@ public final class SearchScreen extends Screen {
         chipScroll.addView(chipRow);
         container.addView(chipScroll);
 
+        historyRow = Ui.column(host.context());
+        container.addView(historyRow);
+        renderHistory();
+
         statusView = Ui.text(host.context(), "", 12f, Theme.TEXT_DIM, false);
         statusView.setPadding(dp(4), dp(10), dp(4), dp(6));
         container.addView(statusView);
@@ -144,6 +152,92 @@ public final class SearchScreen extends Screen {
         background.setColor(Theme.SURFACE_HIGH);
         background.setStroke(dp(1), Theme.OUTLINE);
         return background;
+    }
+
+    /**
+     * Recent searches: tap to run again, long-press to forget one. Hidden
+     * entirely when empty, so a first run stays clean.
+     */
+    private void renderHistory() {
+        if (historyRow == null) {
+            return;
+        }
+        historyRow.removeAllViews();
+        if (history == null) {
+            history = new SearchHistory(host.context());
+        }
+        final List<String> recent = history.recentQueries(6);
+        if (recent.isEmpty()) {
+            return;
+        }
+        LinearLayout header = Ui.row(host.context());
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView label = Ui.text(host.context(), "Recent searches", 12f, Theme.TEXT_DIM, true);
+        header.addView(label, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView clear = Ui.text(host.context(), "Clear", 12f, Theme.ACCENT, false);
+        header.addView(clear, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        clear.setClickable(true);
+        clear.setFocusable(true);
+        clear.setMinimumHeight(dp(48));
+        clear.setGravity(Gravity.CENTER_VERTICAL);
+        A11y.label(clear, "Clear search history");
+        clear.setOnClickListener(new android.view.View.OnClickListener() {
+            @Override
+            public void onClick(android.view.View view) {
+                history.clear();
+                renderHistory();
+                host.showToast("Search history cleared");
+            }
+        });
+        header.setPadding(0, dp(4), 0, dp(4));
+        historyRow.addView(header);
+
+        HorizontalScrollView scroll = new HorizontalScrollView(host.context());
+        scroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout chips = Ui.row(host.context());
+        for (int i = 0; i < recent.size(); i++) {
+            final String value = recent.get(i);
+            Chip chip = new Chip(host.context(), value, new Runnable() {
+                @Override
+                public void run() {
+                    if (input != null) {
+                        input.setText(value);
+                        input.setSelection(input.getText().length());
+                    }
+                    performSearch();
+                }
+            });
+            chip.setOnLongClickListener(new android.view.View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(android.view.View view) {
+                    history.remove(value);
+                    renderHistory();
+                    return true;
+                }
+            });
+            A11y.label(chip, "Search again for " + value);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            params.rightMargin = dp(8);
+            chips.addView(chip, params);
+        }
+        scroll.addView(chips);
+        historyRow.addView(scroll);
+    }
+
+    /** Stores the query for next launch; failures never interrupt a search. */
+    private void rememberQuery(String value) {
+        try {
+            if (history == null) {
+                history = new SearchHistory(host.context());
+            }
+            history.record(value, System.currentTimeMillis());
+            renderHistory();
+        } catch (RuntimeException ignored) {
+            // A full disk must not stop searching.
+        }
     }
 
     private void updateChips() {
@@ -191,6 +285,7 @@ public final class SearchScreen extends Screen {
         }
         query = value;
         searching = true;
+        rememberQuery(value);
         final int currentRequest = ++request;
         final String requestQuery = query;
         final String requestMode = mode;

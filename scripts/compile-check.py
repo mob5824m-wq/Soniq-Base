@@ -57,14 +57,22 @@ def find_android_jar(explicit):
 
 def resource_fields(res_dir):
     fields = []
-    for folder, kind in (("drawable", "drawable"), ("mipmap-anydpi-v26", "mipmap"),
-                         ("mipmap-anydpi", "mipmap"), ("xml", "xml")):
+    ids = []
+    for folder, kind in (("drawable", "drawable"), ("layout", "layout"),
+                         ("mipmap-anydpi-v26", "mipmap"), ("mipmap-anydpi", "mipmap"),
+                         ("xml", "xml")):
         path = os.path.join(res_dir, folder)
         if not os.path.isdir(path):
             continue
         for name in sorted(os.listdir(path)):
-            if name.endswith(".xml"):
-                fields.append((kind, os.path.splitext(name)[0]))
+            if not name.endswith(".xml"):
+                continue
+            fields.append((kind, os.path.splitext(name)[0]))
+            # Layouts declare view ids with @+id/..., which also generate R.id.
+            text = open(os.path.join(path, name), encoding="utf-8").read()
+            for match in re.finditer(r'@\+id/([A-Za-z_][A-Za-z0-9_]*)', text):
+                if match.group(1) not in ids:
+                    ids.append(match.group(1))
     for name in ("strings.xml", "colors.xml", "themes.xml"):
         path = os.path.join(res_dir, "values", name)
         if not os.path.isfile(path):
@@ -76,6 +84,7 @@ def resource_fields(res_dir):
             fields.append(("color", match.group(1)))
         for match in re.finditer(r'<style name="([^"]+)"', text):
             fields.append(("style", match.group(1).replace(".", "_")))
+    fields.extend(("id", name) for name in ids)
     return fields
 
 

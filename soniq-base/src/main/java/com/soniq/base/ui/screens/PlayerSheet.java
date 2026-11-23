@@ -16,6 +16,9 @@ import android.widget.TextView;
 import com.soniq.base.R;
 import com.soniq.base.data.LyricLine;
 import com.soniq.base.data.LyricsApi;
+import com.soniq.base.data.LyricsRepository;
+import com.soniq.base.data.LyricsResult;
+import com.soniq.base.model.LyricsState;
 import com.soniq.base.data.ScrobbleQueue;
 import com.soniq.base.model.MediaItem;
 import com.soniq.base.playback.PlaybackQueue;
@@ -55,7 +58,7 @@ public final class PlayerSheet {
     private final LinearLayout lyricsPanel;
     private final List<LyricLine> lyrics = new ArrayList<>();
     private final ExecutorService lyricsExecutor = Executors.newSingleThreadExecutor();
-    private final LyricsApi lyricsApi;
+    private final LyricsRepository lyricsRepository;
 
     private boolean scrubbing;
     private boolean lyricsVisible;
@@ -66,7 +69,7 @@ public final class PlayerSheet {
 
     public PlayerSheet(Host host) {
         this.host = host;
-        this.lyricsApi = new LyricsApi();
+        this.lyricsRepository = new LyricsRepository();
         this.root = new FrameLayout(host.context());
         root.setBackgroundColor(Theme.BG);
         root.setVisibility(View.GONE);
@@ -538,20 +541,16 @@ public final class PlayerSheet {
             final int request = lyricsRequest;
             final String trackTitle = item.title;
             final String trackArtist = item.author;
+            // Provider hook wins over the search: an instrumental stays instrumental.
+            final String providerLyricsState = resolveLyricsState(item);
             final LyricsApi.CancellationSignal cancellation = new LyricsApi.CancellationSignal();
             lyricsCancellation = cancellation;
             lyricsTask = lyricsExecutor.submit(new Runnable() {
                 @Override
                 public void run() {
-                    List<LyricLine> loadedValue = null;
-                    String failureValue = null;
-                    try {
-                        loadedValue = lyricsApi.fetch(trackTitle, trackArtist, cancellation);
-                    } catch (java.io.IOException error) {
-                        failureValue = error.getMessage();
-                    }
-                    final List<LyricLine> loaded = loadedValue;
-                    final String failure = failureValue;
+                    // The repository never throws: every outcome is a stated result.
+                    final LyricsResult result = lyricsRepository.lookup(
+                            trackTitle, trackArtist, providerLyricsState);
                     host.main().post(new Runnable() {
                         @Override
                         public void run() {
@@ -563,18 +562,28 @@ public final class PlayerSheet {
                             if (lyricsCancellation == cancellation) {
                                 lyricsCancellation = null;
                             }
-                            if (failure != null) {
-                                lyrics.clear();
-                                lyricsView.setMessage("Lyrics unavailable: " + failure);
+                            lyrics.clear();
+                            if (result == null) {
+                                lyricsView.setMessage(host.context()
+                                        .getString(R.string.soniq_lyrics_not_found));
                                 lyricBanner.setText("");
                                 return;
                             }
-                            lyrics.clear();
-                            if (loaded != null) {
-                                lyrics.addAll(loaded);
+                            if (result.hasLyrics()) {
+                                lyrics.addAll(result.lines);
+                                lyricsView.setLyrics(lyrics);
+                                if (!result.synced) {
+                                    // Plain lyrics: say so instead of faking a sync.
+                                    lyricsView.setMessage("Lyrics · not time-synced");
+                                }
+                                updateLyricHighlight(service.getPosition());
+                                return;
                             }
-                            lyricsView.setLyrics(lyrics);
-                            updateLyricHighlight(service.getPosition());
+                            // The three "no lyrics" cases are deliberately distinct.
+                            lyricsView.setMessage(result.status == LyricsResult.Status.INSTRUMENTAL
+                                    ? host.context().getString(R.string.soniq_lyrics_instrumental)
+                                    : result.message());
+                            lyricBanner.setText("");
                         }
                     });
                 }
@@ -582,6 +591,22 @@ public final class PlayerSheet {
             return;
         }
         updateLyricHighlight(position);
+    }
+
+    /** Provider's lyrics state, falling back to the item's own field. */
+    private String resolveLyricsState(MediaItem item) {
+        if (item == null) {
+            return LyricsState.UNKNOWN;
+        }
+        String declared = LyricsState.normalize(item.lyricsState);
+        if (declared.length() > 0) {
+            return declared;
+        }
+        try {
+            return LyricsState.normalize(host.provider().lyricsState(item));
+        } catch (RuntimeException ignored) {
+            return LyricsState.UNKNOWN;
+        }
     }
 
     private void updateLyricHighlight(int position) {

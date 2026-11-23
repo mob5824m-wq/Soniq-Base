@@ -84,6 +84,17 @@ public final class YouTubeMusicProvider implements MusicProvider {
         return track != null && track.id.length() > 0 ? ORIGIN_PREFIX + track.id : "";
     }
 
+    /**
+     * YouTube Music returns lyrics separately (and only for some tracks), so the
+     * example does not claim to know anything here: the framework searches and
+     * reports honestly. A real provider that knows a track is an instrumental
+     * should return {@link com.soniq.base.model.LyricsState#INSTRUMENTAL}.
+     */
+    @Override
+    public String lyricsState(MediaItem track) {
+        return com.soniq.base.model.LyricsState.UNKNOWN;
+    }
+
     /** Maps the framework's standard filters onto this API's search modes. */
     public static String modeFor(String filter) {
         if (FILTER_ARTISTS.equals(filter)) {

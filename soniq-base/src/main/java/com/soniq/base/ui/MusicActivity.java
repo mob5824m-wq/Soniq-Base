@@ -37,6 +37,7 @@ import com.soniq.base.ui.screens.HomeScreen;
 import com.soniq.base.ui.screens.LibraryScreen;
 import com.soniq.base.ui.screens.PlayerSheet;
 import com.soniq.base.ui.screens.QueueSheet;
+import com.soniq.base.ui.screens.RecapSheet;
 import com.soniq.base.ui.screens.Screen;
 import com.soniq.base.ui.screens.SearchScreen;
 import com.soniq.base.ui.screens.SettingsScreen;
@@ -82,6 +83,7 @@ public class MusicActivity extends android.app.Activity implements Host {
     private PlayerSheet playerSheet;
     private QueueSheet queueSheet;
     private CollectionSheet collectionSheet;
+    private RecapSheet recapSheet;
 
     private HomeScreen homeScreen;
     private SearchScreen searchScreen;
@@ -228,6 +230,9 @@ public class MusicActivity extends android.app.Activity implements Host {
         if (collectionSheet != null) {
             collectionSheet.release();
         }
+        if (recapSheet != null) {
+            recapSheet.release();
+        }
         if (homeScreen != null) {
             homeScreen.release();
         }
@@ -254,6 +259,10 @@ public class MusicActivity extends android.app.Activity implements Host {
     }
 
     private void handleBack() {
+        if (recapSheet != null && recapSheet.isShowing()) {
+            recapSheet.hide();
+            return;
+        }
         if (queueSheet != null && queueSheet.isShowing()) {
             queueSheet.hide();
             return;
@@ -354,6 +363,9 @@ public class MusicActivity extends android.app.Activity implements Host {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         queueSheet = new QueueSheet(this);
         overlay.addView(queueSheet.view(), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        recapSheet = new RecapSheet(this);
+        overlay.addView(recapSheet.view(), new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
@@ -602,6 +614,11 @@ public class MusicActivity extends android.app.Activity implements Host {
     @Override
     public void openPlayer() {
         playerSheet.show();
+    }
+
+    @Override
+    public void openInsights() {
+        recapSheet.show();
     }
 
     @Override
@@ -1036,6 +1053,26 @@ public class MusicActivity extends android.app.Activity implements Host {
                 if (isAlive()) {
                     Toast.makeText(MusicActivity.this, message, Toast.LENGTH_SHORT).show();
                 }
+            }
+        });
+    }
+
+    @Override
+    public void shareText(final String chooserTitle, final String text) {
+        if (!isAlive() || text == null || text.length() == 0) {
+            return;
+        }
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!isAlive()) {
+                    return;
+                }
+                Intent share = new Intent(Intent.ACTION_SEND);
+                share.setType("text/plain");
+                share.putExtra(Intent.EXTRA_TEXT, text);
+                startActivity(Intent.createChooser(share,
+                        chooserTitle == null ? "Share" : chooserTitle));
             }
         });
     }

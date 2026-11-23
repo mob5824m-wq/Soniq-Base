@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Permissions, PlaybackService and MediaButtonReceiver come from :soniq-base. -->
+    <!--
+      Permissions, PlaybackService, MediaButtonReceiver and the default widget
+      come from :soniq-base. The app still declares the Android Auto browse
+      service itself, because the browse metadata is app-level (see
+      docs/WIDGETS.md).
+    -->
 
     <application
         android:name=".ExampleApp"
@@ -41,6 +46,19 @@
                 <data android:pathPrefix="/playlist" />
             </intent-filter>
         </activity>
+
+        <!-- Android Auto / Automotive: browse the local library in the car. -->
+        <service
+            android:name="com.soniq.base.playback.SoniqMediaBrowserService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.media.browse.MediaBrowserService"
+                android:resource="@xml/automotive_app_desc" />
+        </service>
     </application>
 
 </manifest>

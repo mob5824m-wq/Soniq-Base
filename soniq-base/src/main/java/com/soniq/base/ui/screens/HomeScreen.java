@@ -5,8 +5,13 @@ import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.soniq.base.R;
 import com.soniq.base.data.Library;
 import com.soniq.base.model.MediaItem;
+import com.soniq.base.playback.PlaybackSession;
+import com.soniq.base.playback.ResumePoint;
+import com.soniq.base.playback.PlaybackService;
+import com.soniq.base.ui.A11y;
 import com.soniq.base.ui.Host;
 import com.soniq.base.ui.Theme;
 import com.soniq.base.ui.Ui;
@@ -35,6 +40,11 @@ public final class HomeScreen extends Screen {
         container.addView(Ui.text(host.context(),
                 tagline.length() > 0 ? tagline : host.provider().displayName(),
                 12f, Theme.TEXT_DIM, false));
+
+        LinearLayout resumeCard = buildResumeCard();
+        if (resumeCard != null) {
+            container.addView(resumeCard);
+        }
 
         HorizontalScrollView chipScroll = new HorizontalScrollView(host.context());
         chipScroll.setHorizontalScrollBarEnabled(false);
@@ -67,6 +77,12 @@ public final class HomeScreen extends Screen {
                 } else {
                     host.play(offline, 0);
                 }
+            }
+        }), chipParams());
+        chipRow.addView(new Chip(host.context(), "Year in review", new Runnable() {
+            @Override
+            public void run() {
+                host.openInsights();
             }
         }), chipParams());
         chipRow.addView(new Chip(host.context(), "Library", new Runnable() {
@@ -223,4 +239,57 @@ public final class HomeScreen extends Screen {
         return "Good evening";
     }
 
+
+    /**
+     * "Continue listening": one tap resumes the exact track and position. Only
+     * shown when the saved point is still meaningful — a resume from last month,
+     * or one 4 seconds into a song, is not offered.
+     */
+    private LinearLayout buildResumeCard() {
+        if (!host.settings().resumeEnabled() || host.service() == null) {
+            return null;
+        }
+        final ResumePoint point;
+        try {
+            point = new PlaybackSession(host.context()).resumePoint();
+        } catch (RuntimeException unavailable) {
+            return null;
+        }
+        if (point == null || !point.isUsable(System.currentTimeMillis())) {
+            return null;
+        }
+        LinearLayout card = Ui.row(host.context());
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        card.setBackground(Ui.ripple(host.context(), Theme.SURFACE_HIGH, 14f));
+        card.setClickable(true);
+        card.setFocusable(true);
+
+        LinearLayout info = Ui.column(host.context());
+        info.addView(Ui.text(host.context(), "Continue listening", 11f, Theme.ACCENT, true));
+        info.addView(Ui.text(host.context(), point.title, 15f, Theme.TEXT, true));
+        info.addView(Ui.text(host.context(), point.summary(), 12f, Theme.TEXT_DIM, false));
+        card.addView(info, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        card.addView(Ui.icon(host.context(), R.drawable.soniq_ic_play, Theme.TEXT, 26));
+        A11y.label(card, "Continue listening: " + point.title + ", " + point.summary());
+        card.setOnClickListener(new android.view.View.OnClickListener() {
+            @Override
+            public void onClick(android.view.View view) {
+                PlaybackService service = host.service();
+                if (service == null) {
+                    host.showToast("Playback is still starting…");
+                    return;
+                }
+                service.restoreQueue();
+                host.openPlayer();
+            }
+        });
+
+        LinearLayout wrapper = Ui.column(host.context());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(14);
+        wrapper.addView(card, params);
+        return wrapper;
+    }
 }

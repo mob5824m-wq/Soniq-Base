@@ -38,7 +38,29 @@ The framework-wide carry-forward requirements distilled from the legacy app are 
   "half the track or four minutes" listen rule, one request per second, and an
   on-disk queue for listens made offline. The `music_service` and `origin_url`
   of each listen come from your provider.
+- **Year in review** — a Wrapped-style recap of any whole calendar year from
+  your ListenBrainz statistics: total listens and listening time, a
+  month-by-month chart, top artists / songs / albums / genres with artwork, the
+  most played era, and a shareable summary. Years still in progress are marked
+  as partial; nothing about it is December-only.
+- **Now-playing widget**: a default home-screen widget (artwork, title, artist,
+  play/pause, next) that the playback service keeps in sync; brand it or ship
+  your own — see [`docs/WIDGETS.md`](docs/WIDGETS.md).
+- **Android Auto browse endpoint**: `SoniqMediaBrowserService` exposes liked
+  songs, recent plays, downloads and playlists to a car head unit.
+- **Crossfade and gapless**: 2–12 s linear crossfade and a prepared-next
+  gapless hand-off, both off by default, both truthful in the media session.
+- **Resume where you left off**: the queue and position persist, and Home offers
+  "Continue listening" only when that position is worth going back to.
+- **Search history**: recent queries as chips, removable one by one or cleared.
+- **Wi-Fi only**: one switch that gates streaming *and* downloads and says why
+  it blocked.
+- **Honest lyrics**: instrumental, not found and unavailable are three different
+  answers, with `MusicProvider.lyricsState()` able to settle it.
+- **Accessibility**: labelled controls, one focus stop per row and 48 dp touch
+  targets throughout, with `ui/A11y` helpers for app screens.
 - **Settings**: stream quality target, sleep timer, equalizer presets,
+  crossfade, gapless, Wi-Fi only, library order, search history, storage,
   notifications, ListenBrainz token, About.
 - **Theming**: one call to rebrand the accent and secondary colours.
 - **Deep links**: a single hook on the activity for your own URL scheme.
@@ -148,6 +170,10 @@ the player response knows better than the search result did.
 - **App-level settings** — keep your own `SharedPreferences` (the example
   stores its preferred InnerTube client in `"soniq_youtube_settings"`); the
   framework never reads them.
+- **Year in review** — `Settings.setInsightsUserName(name)` points the recap at
+  a public ListenBrainz profile; without it the recap uses the user the
+  scrobbling token belongs to. A custom `Host` implementation calls
+  `openInsights()` to show it and `shareText()` for the share sheet.
 
 ## Build this repository
 
@@ -232,12 +258,17 @@ soniq-base/                        the framework (Android library, com.soniq.bas
     provider/MusicProvider.java    the SPI an app implements
     model/MediaItem.java           track / artist / album / playlist model + JSON
     model/StreamSource.java        resolved stream: url, headers, mime, corrected meta
-    data/                          Library, Settings, Downloads, LyricsApi/Parser,
-                                   ImageLoader, ListenBrainzApi, ScrobbleQueue,
-                                   ScrobblePolicy, Scrobble
+    data/                          Library, Settings, Downloads, LyricsApi/Parser/
+                                   Repository, ImageLoader, ListenBrainzApi,
+                                   ScrobbleQueue, ScrobblePolicy, Scrobble,
+                                   ListeningRecap/Api, SearchHistory, NetworkPolicy,
+                                   LibrarySort
     playback/                      PlaybackService, PlaybackQueue, PlaybackPosition,
-                                   MediaButtonReceiver
-    ui/                            MusicActivity, Host, Theme, Ui, views/, screens/
+                                   PlaybackEngine (crossfade/gapless), PlaybackSession,
+                                   ResumePoint, SoniqWidgetProvider,
+                                   SoniqMediaBrowserService, MediaButtonReceiver
+    ui/                            MusicActivity, Host, Theme, Ui, A11y, AdaptiveUi,
+                                   views/, screens/
   src/main/res/                    strings (soniq_ prefix), colours, Theme.SoniqBase
   src/test/                        JVM unit tests
 examples/youtube-music/            reference app (com.soniq.example.youtubemusic)
