@@ -1,13 +1,13 @@
+plugins {
+    id("com.android.library")
+    `maven-publish`
+}
+
 /**
  * Library version. Bump it here for a release; CI overrides it with the tag
  * name when publishing (`-PsoniqVersion=1.2.3` for `v1.2.3`).
  */
 val soniqVersion: String = (findProperty("soniqVersion") as String?) ?: "0.1.0"
-
-plugins {
-    id("com.android.library")
-    `maven-publish`
-}
 
 // Maven coordinates, so `includeBuild()` substitutions and `publishToMavenLocal`
 // both resolve to com.soniq.base:soniq-base:<version>.
