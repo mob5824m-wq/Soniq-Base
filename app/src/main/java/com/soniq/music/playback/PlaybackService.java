@@ -119,6 +119,8 @@ public final class PlaybackService extends Service {
     private ScrobbleQueue scrobbles;
     private boolean tickerRunning;
     private long lastTickRealtime;
+    /** Smooths MediaPlayer's position (stuck 0, stale readings, in-flight seeks). */
+    private final PlaybackPosition position = new PlaybackPosition();
 
     private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
         @Override
@@ -500,8 +502,10 @@ public final class PlaybackService extends Service {
         if (player == null || !prepared) {
             return;
         }
+        int target = Math.max(0, positionMs);
         try {
-            player.seekTo(Math.max(0, positionMs));
+            player.seekTo(target);
+            position.seekTo(target, SystemClock.elapsedRealtime());
             updatePlaybackState();
             notifyChanged();
         } catch (Exception ignored) {
@@ -602,11 +606,23 @@ public final class PlaybackService extends Service {
         return status;
     }
 
+    /**
+     * Position for the UI, MediaSession and listen accounting. Uses the player's
+     * reading when it is plausible and a wall-clock estimate otherwise, so the
+     * seek bar cannot freeze at 0:00 or jump back while a seek is in flight.
+     */
     public int getPosition() {
+        long now = SystemClock.elapsedRealtime();
+        position.setPlaying(isPlaying(), now);
+        return position.update(nativePosition(), now, getDuration());
+    }
+
+    /** Raw player position, or -1 when no player is prepared or the call fails. */
+    private int nativePosition() {
         try {
-            return player != null && prepared ? player.getCurrentPosition() : 0;
+            return player != null && prepared ? Math.max(0, player.getCurrentPosition()) : -1;
         } catch (Exception ignored) {
-            return 0;
+            return -1;
         }
     }
 
@@ -888,6 +904,11 @@ public final class PlaybackService extends Service {
             if (!mediaPlayer.isPlaying()) {
                 mediaPlayer.start();
             }
+            long now = SystemClock.elapsedRealtime();
+            int nativePosition = nativePosition();
+            position.anchor(nativePosition > 0 ? nativePosition
+                    : position.update(-1, now, getDuration()), now);
+            position.setPlaying(true, now);
             acquireLocks();
             scrobbles.playbackStarted(queue.current());
             startTicker();
@@ -939,6 +960,7 @@ public final class PlaybackService extends Service {
 
     private void pauseInternal() {
         stopTicker();
+        position.setPlaying(false, SystemClock.elapsedRealtime());
         if (player != null && prepared) {
             try {
                 player.pause();
@@ -956,6 +978,8 @@ public final class PlaybackService extends Service {
             try {
                 player.seekTo(0);
                 player.start();
+                position.seekTo(0, SystemClock.elapsedRealtime());
+                position.setPlaying(true, SystemClock.elapsedRealtime());
                 scrobbles.trackChanged(queue.current());
                 scrobbles.playbackStarted(queue.current());
                 return;
@@ -990,6 +1014,7 @@ public final class PlaybackService extends Service {
 
     private void releasePlayer() {
         stopTicker();
+        position.reset();
         if (equalizer != null) {
             try {
                 equalizer.release();
@@ -1066,6 +1091,7 @@ public final class PlaybackService extends Service {
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
                 pausedByFocusLoss = true;
                 stopTicker();
+                position.setPlaying(false, SystemClock.elapsedRealtime());
                 if (player != null && prepared) {
                     try {
                         player.pause();

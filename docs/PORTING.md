@@ -55,6 +55,17 @@ make Android 4 survive TLS, DASH and modern HTTP.
   flushed as `import` batches at one request per second. The Kobo app had no
   scrobbling at all.
 
+## Upstream changes reviewed after the port
+
+Upstream `main` is re-checked periodically; the port started from `382daa0`.
+
+| Upstream commit | What it did | In Soniq Music |
+| --- | --- | --- |
+| `6e7b566` "YouTube Music seek bar stuck — add wall-clock position fallback" | `Arc7AudioService.getPositionMs()` anchored the position at play/seek time and advanced it by wall clock when Android 4.2 Stagefright reported a stuck `0` for proxied streams | Ported as `playback/PlaybackPosition` (clean-room, unit-tested): a positive player reading is authoritative, zero/unavailable readings fall back to the estimate, pre-seek readings are ignored until the seek is confirmed, pause freezes the estimate. Wired into `PlaybackService.getPosition()`/`seekTo()`. |
+| `8585e14` "track YouTube video preparation and timeline" | `YouTubeActivity` + new `VideoPositionTracker` for the YouTube *video* app's `VideoView` | Not applicable — the video app is not part of this port. Its "ignore stale zeros / seek-pending" ideas were folded into `PlaybackPosition`. |
+| `ef24020` audio home-screen widget rework | Arc7 glass `RemoteViews` widget | Not applicable — the port uses a `MediaStyle` media notification instead. |
+| `chore: update pre-built signed APKs` (several) | Rebuilt release binaries | Not applicable — no binaries are committed here. |
+
 ## Behavioural differences
 
 | Area | Kobo Arc 7 (upstream) | Soniq Music |

@@ -32,6 +32,10 @@ keeps the APK small enough for old-but-supported devices.
   in `README.md`.
 - **No bundled binaries.** No checked-in APKs, native libraries, keystores or
   third-party JARs. The Gradle wrapper is the only binary in the tree.
+- **Position reporting.** `PlaybackService.getPosition()` must go through
+  `PlaybackPosition`; never read `MediaPlayer.getCurrentPosition()` directly
+  for UI/MediaSession (it can read 0 right after start or the pre-seek value
+  mid-seek). Keep that class Android-free so it stays unit-tested.
 - **Parser isolation.** All InnerTube/YouTube JSON parsing lives in
   `data/YouTubeMusicApi.java`. Keep it defensive: every field is optional,
   every array can be missing, and a malformed response must degrade to an
@@ -105,6 +109,8 @@ app/src/main/java/com/soniq/music/
     PlaybackService.java    foreground service, MediaPlayer, MediaSession, notification,
                             audio focus, wake/wifi locks, sleep timer, equalizer
     PlaybackQueue.java      queue / shuffle / repeat (pure JVM, unit-tested)
+    PlaybackPosition.java   smooths MediaPlayer position (stuck 0, stale readings,
+                            in-flight seeks) with a wall-clock estimate (pure JVM)
     MediaButtonReceiver.java headset / Bluetooth buttons
   ui/
     MainActivity.java       activity, tabs, service binding, dialogs, deep links
