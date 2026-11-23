@@ -15,6 +15,10 @@ public final class Settings {
     private static final String KEY_QUALITY = "target_bitrate";
     private static final String KEY_CLIENT = "preferred_client";
     private static final String KEY_NOTIFICATIONS_ASKED = "notifications_asked";
+    private static final String KEY_SCROBBLE_ENABLED = "scrobble_enabled";
+    private static final String KEY_SCROBBLE_TOKEN = "scrobble_token";
+    private static final String KEY_SCROBBLE_USER = "scrobble_user_name";
+    private static final String KEY_SCROBBLE_NOW_PLAYING = "scrobble_announce_now_playing";
 
     private final SharedPreferences prefs;
 
@@ -49,5 +53,64 @@ public final class Settings {
 
     public String qualityLabel() {
         return (targetBitrate() / 1000) + " kbps";
+    }
+
+    /* ============================================================ ListenBrainz */
+
+    /** Master switch. Off by default: scrobbling sends listening history off-device. */
+    public boolean scrobblingEnabled() {
+        return prefs.getBoolean(KEY_SCROBBLE_ENABLED, false);
+    }
+
+    public void setScrobblingEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_SCROBBLE_ENABLED, enabled).apply();
+    }
+
+    /** ListenBrainz user token (from listenbrainz.org/settings). Never log this value. */
+    public String listenBrainzToken() {
+        String token = prefs.getString(KEY_SCROBBLE_TOKEN, "");
+        return token == null ? "" : token.trim();
+    }
+
+    public void setListenBrainzToken(String token) {
+        String value = token == null ? "" : token.trim();
+        prefs.edit().putString(KEY_SCROBBLE_TOKEN, value).apply();
+        if (value.length() == 0) {
+            prefs.edit().putString(KEY_SCROBBLE_USER, "").apply();
+        }
+    }
+
+    /** MusicBrainz user name cached from the last successful validate-token call. */
+    public String scrobbleUserName() {
+        String name = prefs.getString(KEY_SCROBBLE_USER, "");
+        return name == null ? "" : name;
+    }
+
+    public void setScrobbleUserName(String name) {
+        prefs.edit().putString(KEY_SCROBBLE_USER, name == null ? "" : name).apply();
+    }
+
+    /** Whether to send a playing_now update when a track starts (on by default). */
+    public boolean announceNowPlaying() {
+        return prefs.getBoolean(KEY_SCROBBLE_NOW_PLAYING, true);
+    }
+
+    public void setAnnounceNowPlaying(boolean announce) {
+        prefs.edit().putBoolean(KEY_SCROBBLE_NOW_PLAYING, announce).apply();
+    }
+
+    /** True when scrobbling is switched on and a token is present. */
+    public boolean isListenBrainzConfigured() {
+        return scrobblingEnabled() && listenBrainzToken().length() > 0;
+    }
+
+    /** Masked token for UI display, e.g. "••••••1a2b". */
+    public String maskedListenBrainzToken() {
+        String token = listenBrainzToken();
+        if (token.length() == 0) {
+            return "";
+        }
+        String tail = token.length() <= 4 ? token : token.substring(token.length() - 4);
+        return "••••••" + tail;
     }
 }

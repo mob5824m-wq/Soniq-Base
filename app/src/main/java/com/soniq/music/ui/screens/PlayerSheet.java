@@ -15,6 +15,7 @@ import android.widget.TextView;
 import com.soniq.music.R;
 import com.soniq.music.data.LyricLine;
 import com.soniq.music.data.LyricsApi;
+import com.soniq.music.data.ScrobbleQueue;
 import com.soniq.music.data.MediaItem;
 import com.soniq.music.playback.PlaybackQueue;
 import com.soniq.music.playback.PlaybackService;
@@ -426,7 +427,8 @@ public final class PlayerSheet {
             positionLabel.setText(Theme.formatDuration(position));
         }
         durationLabel.setText(duration > 0 ? Theme.formatDuration(duration) : "--:--");
-        statusLabel.setText(service.isPreparing() ? service.getStatus() : "");
+        statusLabel.setText(service.isPreparing()
+                ? service.getStatus() : scrobbleBadge(item));
 
         updateLyrics(item, service, position);
     }
@@ -481,6 +483,15 @@ public final class PlayerSheet {
         } else {
             lyricBanner.setText("");
         }
+    }
+
+    /** Small accent line confirming the current song was sent to ListenBrainz. */
+    private String scrobbleBadge(MediaItem item) {
+        if (!host.settings().scrobblingEnabled() || item == null) {
+            return "";
+        }
+        return ScrobbleQueue.get(host.context()).isCurrentTrackScrobbled()
+                ? "Scrobbled to ListenBrainz ✓" : "";
     }
 
     private PlaybackService service() {

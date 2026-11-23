@@ -25,6 +25,11 @@ YouTube Music app in
   dialog and an offline index in private storage.
 - **Settings** for stream quality (128/256 kbps), preferred InnerTube client,
   sleep timer, equalizer presets and notifications.
+- **ListenBrainz scrobbling** (opt-in): paste your user token, and finished
+  listens are submitted with artist, track, album, duration and YouTube Music
+  link. A `playing_now` update is sent when a song starts; listens made
+  offline are queued and sent later. Follows ListenBrainz' "half the track or
+  four minutes" rule and one-request-per-second limit.
 - **Deep links** for `music.youtube.com` and `youtu.be` URLs.
 
 ## Requirements
@@ -68,13 +73,18 @@ python3 scripts/compile-check.py --ecj /path/to/ecj-4.30.jar
 - **Downloads** are stored unencrypted in public MediaStore; removing the app
   keeps the files (delete them from your music player/files app).
 - **Artwork cache** is memory-only and cleared when the process dies.
+- **ListenBrainz** needs a free account token from
+  <https://listenbrainz.org/settings>; it is stored only in the app's private
+  storage and sent only to `api.listenbrainz.org`. Scrobbling is off until you
+  add a token.
 
 ## Project layout
 
 ```
 app/src/main/java/com/soniq/music/
   data/        MediaItem, InnerTubeClient, YouTubeMusicApi, Library, Settings,
-               Downloads, LyricsApi/Parser, ImageLoader
+               Downloads, LyricsApi/Parser, ImageLoader, ListenBrainzApi,
+               ScrobbleQueue, ScrobblePolicy, Scrobble
   playback/    PlaybackService, PlaybackQueue, MediaButtonReceiver
   ui/          MainActivity, Host, Theme, Ui, views/, screens/
 app/src/test/  JVM unit tests

@@ -49,6 +49,16 @@ keeps the APK small enough for old-but-supported devices.
   account, no telemetry.
 - **Version consistency.** `versionCode` / `versionName` in
   `app/build.gradle.kts` and the About screen must agree. Bump them together.
+- **ListenBrainz scrobbling is opt-in and privacy-sensitive.** The user token
+  lives in private `SharedPreferences` (`Settings.listenBrainzToken()`); never
+  log it, never put it in a URL or analytics, and mask it in the UI
+  (`Settings.maskedListenBrainzToken()`). Keep the official listen rule
+  (`ScrobblePolicy`: half the track or four minutes, whichever is lower),
+  send `playing_now` without `listened_at`, `single`/`import` with the
+  playback start time, and never exceed one API call per second
+  (`ScrobbleQueue` spaces requests and honours 429 `Retry-After`). All
+  submission goes through `ScrobbleQueue`; do not call `ListenBrainzApi` from
+  UI code except for `validateToken`.
 
 ## Build & verify
 
@@ -84,6 +94,10 @@ app/src/main/java/com/soniq/music/
     Library.java            liked / artists / collections / local playlists / recent
     Settings.java           quality, preferred client, notification-prompt state
     Downloads.java          MediaStore downloads + offline index
+    ListenBrainzApi.java    validate-token / submit-listens HTTP client
+    ScrobbleQueue.java      listen detection, playing_now, offline listen queue
+    ScrobblePolicy.java     listen threshold + metadata cleaning (pure, unit-tested)
+    Scrobble.java           one persisted listen
     LyricsApi.java          lrclib.net client
     LyricsParser.java       LRC parser (pure JVM, unit-tested)
     ImageLoader.java        bounded in-memory artwork cache
@@ -100,7 +114,8 @@ app/src/main/java/com/soniq/music/
     Tab.java                bottom navigation destinations
     views/                  TrackRow, Chip, BottomNav, MiniPlayer, LyricsView
     screens/                Home, Search, Library, Settings, Player, Queue, Collection
-app/src/test/java/           JUnit tests for queue, lyrics, model and filename logic
+app/src/test/java/           JUnit tests for queue, lyrics, scrobble policy, model
+                            and filename logic
 docs/PORTING.md              upstream class → replacement mapping
 scripts/compile-check.py     android.jar-only compile check
 ```

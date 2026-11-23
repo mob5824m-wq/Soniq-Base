@@ -47,6 +47,14 @@ make Android 4 survive TLS, DASH and modern HTTP.
   detection and the glass skin are not applicable to phones.
 - **Account sync and history.** Everything is local to the device.
 
+## Additions not present upstream
+
+- **ListenBrainz scrobbling** (`data/ListenBrainzApi`, `ScrobbleQueue`,
+  `ScrobblePolicy`): opt-in token auth, `playing_now` updates, ListenBrainz'
+  half-or-four-minutes listen rule, and an on-disk queue for offline listens
+  flushed as `import` batches at one request per second. The Kobo app had no
+  scrobbling at all.
+
 ## Behavioural differences
 
 | Area | Kobo Arc 7 (upstream) | Soniq Music |

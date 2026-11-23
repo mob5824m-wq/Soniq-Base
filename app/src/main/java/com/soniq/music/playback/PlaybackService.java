@@ -27,12 +27,14 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import com.soniq.music.R;
 import com.soniq.music.data.ImageLoader;
 import com.soniq.music.data.Library;
 import com.soniq.music.data.MediaItem;
 import com.soniq.music.data.ResolvedTrack;
+import com.soniq.music.data.ScrobbleQueue;
 import com.soniq.music.data.YouTubeMusicApi;
 
 import java.io.IOException;
@@ -114,6 +116,10 @@ public final class PlaybackService extends Service {
     private long sleepEndAt;
     private Runnable sleepRunnable;
 
+    private ScrobbleQueue scrobbles;
+    private boolean tickerRunning;
+    private long lastTickRealtime;
+
     private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -141,6 +147,8 @@ public final class PlaybackService extends Service {
         } else {
             registerReceiver(noisyReceiver, noisyFilter);
         }
+        scrobbles = ScrobbleQueue.get(this);
+        scrobbles.flush();
         updateNotification();
     }
 
@@ -723,6 +731,7 @@ public final class PlaybackService extends Service {
         notifyChanged();
         loadArtwork(item);
         library.addRecent(item);
+        scrobbles.trackChanged(item);
 
         if (item.localUri.length() > 0) {
             main.post(new Runnable() {
@@ -880,6 +889,8 @@ public final class PlaybackService extends Service {
                 mediaPlayer.start();
             }
             acquireLocks();
+            scrobbles.playbackStarted(queue.current());
+            startTicker();
             updatePlaybackState();
             updateMetadata();
             updateNotification();
@@ -889,7 +900,45 @@ public final class PlaybackService extends Service {
         }
     }
 
+    /* ============================================================== scrobbling */
+
+    /** Feeds real listening time to the scrobble queue about once per second. */
+    private final Runnable scrobbleTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (!tickerRunning) {
+                return;
+            }
+            if (!isPlaying()) {
+                tickerRunning = false;
+                lastTickRealtime = 0L;
+                return;
+            }
+            long now = SystemClock.elapsedRealtime();
+            long delta = lastTickRealtime > 0L ? now - lastTickRealtime : 0L;
+            lastTickRealtime = now;
+            scrobbles.playbackTick(queue.current(), delta, getDuration());
+            main.postDelayed(this, 1000L);
+        }
+    };
+
+    private void startTicker() {
+        if (tickerRunning) {
+            return;
+        }
+        tickerRunning = true;
+        lastTickRealtime = SystemClock.elapsedRealtime();
+        main.postDelayed(scrobbleTicker, 1000L);
+    }
+
+    private void stopTicker() {
+        tickerRunning = false;
+        lastTickRealtime = 0L;
+        main.removeCallbacks(scrobbleTicker);
+    }
+
     private void pauseInternal() {
+        stopTicker();
         if (player != null && prepared) {
             try {
                 player.pause();
@@ -907,6 +956,8 @@ public final class PlaybackService extends Service {
             try {
                 player.seekTo(0);
                 player.start();
+                scrobbles.trackChanged(queue.current());
+                scrobbles.playbackStarted(queue.current());
                 return;
             } catch (Exception ignored) {
             }
@@ -938,6 +989,7 @@ public final class PlaybackService extends Service {
     }
 
     private void releasePlayer() {
+        stopTicker();
         if (equalizer != null) {
             try {
                 equalizer.release();
@@ -1013,6 +1065,7 @@ public final class PlaybackService extends Service {
                 break;
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
                 pausedByFocusLoss = true;
+                stopTicker();
                 if (player != null && prepared) {
                     try {
                         player.pause();
