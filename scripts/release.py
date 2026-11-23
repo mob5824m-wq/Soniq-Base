@@ -143,7 +143,7 @@ class Changelog:
 
 def release_body(version, body, slug):
     slug = slug or "mob5824m-wq/Soniq-Base"
-    return "%s\n\n## Using this release\n\n```kotlin\n// settings.gradle.kts\nrepositories {\n    maven {\n        url = uri(\"https://maven.pkg.github.com/%s\")\n        // A GitHub token with read:packages, even for public packages.\n        credentials { username = githubUser; password = githubToken }\n    }\n}\n\n// build.gradle.kts\ndependencies { implementation(\"com.soniq.base:soniq-base:%s\") }\n```\n\nOther ways to depend on the library (composite build, submodule, sources) are\nlisted in the README under \"Depending on the library\".\n\n## Assets\n\n- `soniq-base-release.aar` — the library\n- `soniq-base-*-sources.jar` — library sources\n- `app-release.apk` — the YouTube Music example app (debug-signed)\n" % (
+    return "%s\n\n## Using this release\n\n```kotlin\n// settings.gradle.kts\nrepositories {\n    maven {\n        url = uri(\"https://maven.pkg.github.com/%s\")\n        // A GitHub token with read:packages, even for public packages.\n        credentials { username = githubUser; password = githubToken }\n    }\n}\n\n// build.gradle.kts\ndependencies { implementation(\"com.soniq.base:soniq-base:%s\") }\n```\n\nOther ways to depend on the library (composite build, submodule, sources) are\nlisted in the README under \"Depending on the library\".\n\n## Assets\n\n- `soniq-base-release.aar` — the library\n- `soniq-base-*-sources.jar` — library sources\n- `youtube-music-release.apk` — the YouTube Music example app (debug-signed)\n" % (
         body, slug, version)
 
 

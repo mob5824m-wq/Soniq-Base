@@ -100,10 +100,16 @@ jobs:
           PRERELEASE: ${{ steps.tag.outputs.prerelease }}
           GENERATED: ${{ steps.notes.outputs.generated }}
         run: |
+          # AGP puts the AAR under build/outputs/aar but the sources JAR elsewhere
+          # under build/, so search the whole build directory.
           assets=()
           while IFS= read -r file; do assets+=("$file"); done < <(
-            find soniq-base/build/outputs -name '*.aar' -o -name '*sources*.jar';
+            find soniq-base/build \( -name '*.aar' -o -name '*sources*.jar' \);
             find examples/youtube-music/build/outputs/apk/release -name '*.apk')
+          echo "artifacts in build:"; find soniq-base/build \( -name '*.jar' -o -name '*.aar' \) | sort
+          if [[ " ${assets[*]} " != *sources* ]]; then
+            echo "::warning::No sources JAR found under soniq-base/build; the GitHub Release will lack it (Maven consumers still get it)."
+          fi
           echo "assets: ${assets[*]}"
           prerelease_flag=(); [[ "$PRERELEASE" == "true" ]] && prerelease_flag=(--prerelease)
           if gh release view "$TAG" >/dev/null 2>&1; then
