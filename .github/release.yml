@@ -1,0 +1,10 @@
+# Categories for GitHub's auto-generated release notes (used only when
+# CHANGELOG.md has no section for the tag — the normal path is the changelog).
+changelog:
+  categories:
+    - title: "### Added"
+      labels: ["enhancement", "feature"]
+    - title: "### Fixed"
+      labels: ["bug", "fix"]
+    - title: "### Other changes"
+      labels: ["*"]

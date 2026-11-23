@@ -1,7 +1,6 @@
 # Gradle
 .gradle/
 build/
-app/build/
 local.properties
 
 # Android / IDE
@@ -21,3 +20,6 @@ Thumbs.db
 
 # Generated verification output
 .check/
+
+# Python
+__pycache__/

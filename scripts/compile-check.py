@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Compile the app's Java sources against android.jar without Gradle.
+"""Compile every module's Java sources against android.jar without Gradle.
 
 This is the fast sanity check used when the full Android toolchain is not
 available (for example in a sandbox with only a JDK and one platform jar).
-It generates a temporary ``R.java`` stub from ``app/src/main/res`` so resource
-references resolve, then compiles every main (and optionally test) source file.
+It generates a temporary ``R.java`` stub per module from its ``src/main/res``
+so resource references resolve, then compiles all main (and optionally the
+library's test) sources together.
 
 Usage:
     python3 scripts/compile-check.py                       # uses ANDROID_HOME
@@ -26,11 +27,14 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RES = os.path.join(ROOT, "app", "src", "main", "res")
-MAIN = os.path.join(ROOT, "app", "src", "main", "java")
-TEST = os.path.join(ROOT, "app", "src", "test", "java")
-PACKAGE = "com.soniq.music"
-PACKAGE_PATH = PACKAGE.replace(".", "/")
+
+# (module dir, namespace, has unit tests). The example app's R must be generated
+# too because it references its own launcher resources in code-free manifest only,
+# but its classes reference the library R.
+MODULES = [
+    ("soniq-base", "com.soniq.base", True),
+    ("examples/youtube-music", "com.soniq.example.youtubemusic", False),
+]
 
 
 def find_android_jar(explicit):
@@ -51,18 +55,18 @@ def find_android_jar(explicit):
     return None
 
 
-def resource_fields():
+def resource_fields(res_dir):
     fields = []
     for folder, kind in (("drawable", "drawable"), ("mipmap-anydpi-v26", "mipmap"),
-                         ("xml", "xml")):
-        path = os.path.join(RES, folder)
+                         ("mipmap-anydpi", "mipmap"), ("xml", "xml")):
+        path = os.path.join(res_dir, folder)
         if not os.path.isdir(path):
             continue
         for name in sorted(os.listdir(path)):
             if name.endswith(".xml"):
                 fields.append((kind, os.path.splitext(name)[0]))
     for name in ("strings.xml", "colors.xml", "themes.xml"):
-        path = os.path.join(RES, "values", name)
+        path = os.path.join(res_dir, "values", name)
         if not os.path.isfile(path):
             continue
         text = open(path, encoding="utf-8").read()
@@ -75,12 +79,12 @@ def resource_fields():
     return fields
 
 
-def write_r_stub(directory):
-    path = os.path.join(directory, PACKAGE_PATH)
+def write_r_stub(directory, package, res_dir):
+    path = os.path.join(directory, package.replace(".", "/"))
     os.makedirs(path, exist_ok=True)
-    lines = ["package %s;" % PACKAGE, "", "public final class R {"]
+    lines = ["package %s;" % package, "", "public final class R {"]
     current = None
-    for kind, name in resource_fields():
+    for kind, name in resource_fields(res_dir):
         if kind != current:
             if current:
                 lines.append("    }")
@@ -92,6 +96,7 @@ def write_r_stub(directory):
     lines.append("}")
     with open(os.path.join(path, "R.java"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
+    return os.path.join(path, "R.java")
 
 
 def run(command, cwd=None):
@@ -106,7 +111,7 @@ def main():
     parser.add_argument("--ecj", help="Path to ecj-X.jar; used when javac is unavailable")
     parser.add_argument("--java", help="java executable for running --ecj (default: PATH)")
     parser.add_argument("--tests", action="store_true",
-                        help="Compile test sources too (requires --junit)")
+                        help="Compile the library's test sources too (requires --junit)")
     parser.add_argument("--junit", help="Path to junit-X.jar for --tests")
     parser.add_argument("--output", help="Directory for .class files (default: temp)")
     args = parser.parse_args()
@@ -125,12 +130,18 @@ def main():
     output = args.output or tempfile.mkdtemp(prefix="soniq-check-")
     os.makedirs(output, exist_ok=True)
     stub_dir = tempfile.mkdtemp(prefix="soniq-r-")
-    write_r_stub(stub_dir)
 
-    sources = sorted(glob.glob(os.path.join(MAIN, "**", "*.java"), recursive=True))
-    sources.append(os.path.join(stub_dir, PACKAGE_PATH, "R.java"))
-    if args.tests:
-        sources.extend(sorted(glob.glob(os.path.join(TEST, "**", "*.java"), recursive=True)))
+    sources = []
+    for module, package, has_tests in MODULES:
+        module_dir = os.path.join(ROOT, *module.split("/"))
+        sources.extend(sorted(glob.glob(os.path.join(
+            module_dir, "src", "main", "java", "**", "*.java"), recursive=True)))
+        res_dir = os.path.join(module_dir, "src", "main", "res")
+        if os.path.isdir(res_dir):
+            sources.append(write_r_stub(stub_dir, package, res_dir))
+        if args.tests and has_tests:
+            sources.extend(sorted(glob.glob(os.path.join(
+                module_dir, "src", "test", "java", "**", "*.java"), recursive=True)))
 
     javac = shutil.which("javac")
     if javac:
@@ -152,7 +163,7 @@ def main():
         print("OK: %d Java files compiled against %s" % (len(sources), android_jar))
         if not args.output:
             shutil.rmtree(output, ignore_errors=True)
-        shutil.rmtree(stub_dir, ignore_errors=True)
+    shutil.rmtree(stub_dir, ignore_errors=True)
     return code
 
 
