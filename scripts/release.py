@@ -143,7 +143,7 @@ class Changelog:
 
 def release_body(version, body, slug):
     slug = slug or "mob5824m-wq/Soniq-Base"
-    return "%s\n\n## Using this release\n\n```kotlin\n// settings.gradle.kts\nrepositories {\n    maven {\n        url = uri(\"https://maven.pkg.github.com/%s\")\n        // A GitHub token with read:packages, even for public packages.\n        credentials { username = githubUser; password = githubToken }\n    }\n}\n\n// build.gradle.kts\ndependencies { implementation(\"com.soniq.base:soniq-base:%s\") }\n```\n\nOther ways to depend on the library (composite build, submodule, sources) are\nlisted in the README under \"Depending on the library\".\n\n## Assets\n\n- `soniq-base-release.aar` — the library\n- `soniq-base-*-sources.jar` — library sources\n- `app-release.apk` — the YouTube Music example app (debug-signed)\n" % (
+    return "%s\n\n## Using this release\n\n```kotlin\n// settings.gradle.kts\nrepositories {\n    maven {\n        url = uri(\"https://maven.pkg.github.com/%s\")\n        // A GitHub token with read:packages, even for public packages.\n        credentials { username = githubUser; password = githubToken }\n    }\n}\n\n// build.gradle.kts\ndependencies { implementation(\"com.soniq.base:soniq-base:%s\") }\n```\n\nOther ways to depend on the library (composite build, submodule, sources) are\nlisted in the README under \"Depending on the library\".\n\n## Assets\n\n- `soniq-base-release.aar` — the library\n- `soniq-base-*-sources.jar` — library sources\n- `youtube-music-release.apk` — the YouTube Music example app (debug-signed)\n" % (
         body, slug, version)
 
 
@@ -167,6 +167,28 @@ def sync_main(allow_ahead):
     if ahead and not allow_ahead:
         die("main has %d unpushed commit(s); push them before tagging." % ahead)
     return ahead
+
+
+def tag_main(version, tag, slug, apply):
+    """Tag an up-to-date main whose changelog already has the version's section."""
+    if current_branch() != "main":
+        die("run this on main (you are on %s)." % current_branch())
+    sync_main(allow_ahead=False)
+    if Changelog(open(CHANGELOG, encoding="utf-8").read()).section_body(version) is None:
+        die("CHANGELOG.md on main has no [%s] section. Add it with "
+            "`scripts/release.py %s --pr`, or tag the commit that has it." % (version, version))
+    kind = "pre-release" if "-" in version else "release"
+    print("  tag %s  →  %s  (%s)" % (tag, git("rev-parse", "--short", "HEAD"), kind))
+    print("  push origin %s" % tag)
+    print("  → Release workflow: build + tests, publish com.soniq.base:soniq-base:%s, "
+          "GitHub Release" % version)
+    if not apply:
+        print("\nDry run. Re-run with --yes to tag and push.")
+        return
+    git("tag", "-a", tag, "-m", "Soniq Base %s" % version)
+    git("push", "origin", tag)
+    print("Tagged %s and pushed it; the Release workflow is running." % tag)
+    urls(tag, slug)
 
 
 def show_diff(old, new):
@@ -221,7 +243,6 @@ def main():
     tag = "v" + version
     date = args.date or datetime.date.today().isoformat()
     slug = repo_slug()
-    prerelease = "-" in version
 
     if not os.path.exists(CHANGELOG):
         die("CHANGELOG.md not found next to the repository root.")
@@ -244,22 +265,8 @@ def main():
     require_clean_tree()
 
     if args.tag_only:
-        if current_branch() != "main":
-            die("run this on main (you are on %s)." % current_branch())
-        sync_main(allow_ahead=False)
-        if changelog.section_body(version) is None:
-            die("CHANGELOG.md on main has no [%s] section. Add it with "
-                "`scripts/release.py %s --pr`, or tag the commit that has it." % (version, version))
-        print("Plan:\n  tag %s  →  %s  (%s)\n  push origin %s" % (
-            tag, git("rev-parse", "--short", "HEAD"),
-            "pre-release" if prerelease else "release", tag))
-        if not args.yes:
-            print("\nDry run. Re-run with --yes to tag and push.")
-            return
-        git("tag", "-a", tag, "-m", "Soniq Base %s" % version)
-        git("push", "origin", tag)
-        print("Tagged %s and pushed it; the Release workflow is running." % tag)
-        urls(tag, slug)
+        print("Plan:")
+        tag_main(version, tag, slug, args.yes)
         return
 
     if args.pr:
@@ -306,6 +313,12 @@ def main():
         return
 
     # Direct release: commit the changelog on main, tag, push both.
+    if changelog.section_body(version) is not None:
+        # The section was added in a feature or release PR: nothing to commit.
+        print("CHANGELOG.md already has a [%s] section — nothing to commit.\n" % version)
+        print("Plan:")
+        tag_main(version, tag, slug, args.yes)
+        return
     new_text = changelog.release(version, date, args.notes)
     if new_text is None:
         die("nothing under [Unreleased] and no --notes; add changelog entries first.")
@@ -316,7 +329,7 @@ def main():
     ahead = sync_main(allow_ahead=True)
     print("Plan:\n  commit \"Release %s\" on main (CHANGELOG.md only)%s" % (
         version, ", pushing %d local commit(s) ahead of origin" % ahead if ahead else ""))
-    print("  tag %s  →  %s  (%s)" % (tag, version, "pre-release" if prerelease else "release"))
+    print("  tag %s  →  %s  (%s)" % (tag, version, "pre-release" if "-" in version else "release"))
     print("  push origin main, then origin %s" % tag)
     print("  → Release workflow: build + tests, publish com.soniq.base:soniq-base:%s, "
           "GitHub Release\n" % version)
