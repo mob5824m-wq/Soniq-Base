@@ -19,6 +19,8 @@ you want to build your own app in your own repository.
 
 ## What the framework gives you
 
+The framework-wide carry-forward requirements distilled from the legacy app are listed in [docs/OLD-APP-REQUIRED-FEATURES.md](docs/OLD-APP-REQUIRED-FEATURES.md).
+
 - **Playback** through a foreground `mediaPlayback` service with
   `MediaPlayer`, `MediaSession`, lock-screen / Bluetooth / headset controls,
   a `MediaStyle` notification, audio focus with ducking, wake/Wi-Fi locks and
