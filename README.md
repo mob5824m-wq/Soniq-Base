@@ -157,8 +157,9 @@ the player response knows better than the search result did.
 ```
 
 Requires JDK 17 and an Android SDK with platform 35. The Gradle wrapper pins
-Gradle 8.9 and AGP 8.7.3. Pushing a `v*` tag publishes that version to
-GitHub Packages (`.github/workflows/build.yml`).
+Gradle 8.9 and AGP 8.7.3. Module versions are derived from git — the latest
+`vX.Y.Z` tag, or `X.Y.Z-SNAPSHOT` on later commits — so there is no version
+number to bump; see [Releases](#releases).
 
 No APK or AAR is committed to the repository. Build with the commands above, or
 download the `soniq-youtube-music-example-debug` / `soniq-base-debug-aar`
@@ -174,6 +175,36 @@ python3 scripts/compile-check.py --ecj /path/to/ecj-4.30.jar --java /path/to/jav
 
 This compiles every module against a single `android.jar` and (with `--tests`)
 the library's unit tests, without Gradle.
+
+## Releases
+
+A release is a `vX.Y.Z` tag on `main` plus a `CHANGELOG.md` section — nothing
+else. Pushing the tag runs `.github/workflows/release.yml`, which
+
+1. builds the library and the example app (release variants) and runs the unit
+   tests,
+2. publishes `com.soniq.base:soniq-base:X.Y.Z` to GitHub Packages, and
+3. creates the GitHub Release with the changelog section as notes and the AAR,
+   sources JAR and example APK attached (`-rc.1`-style tags become pre-releases).
+
+The easy way, from a clean checkout of `main`:
+
+```bash
+python3 scripts/release.py 0.2.0            # validate and show the plan (dry run)
+python3 scripts/release.py 0.2.0 --yes      # commit the changelog, tag v0.2.0, push both
+```
+
+Add entries under `## [Unreleased]` in `CHANGELOG.md` as you go (or pass
+`--notes "…"`); the script moves them into the new version's section, updates
+the compare links, refuses to run on a dirty tree, a stale `main` or an
+existing tag, and prints the Actions and release URLs. Needs Python 3.8+.
+
+- **Protected `main`?** `python3 scripts/release.py 0.2.0 --pr` opens a
+  "Release 0.2.0" pull request with the changelog; once it is merged, run
+  `python3 scripts/release.py 0.2.0 --tag-only --yes` on an up-to-date `main`.
+- **Prefer the GitHub UI?** "Draft a new release" → type a new tag `vX.Y.Z` →
+  publish. The same workflow runs; if the changelog has no section for it, the
+  release gets auto-generated notes and the assets are attached to it.
 
 ## The example app: YouTube Music
 
@@ -214,7 +245,11 @@ examples/youtube-music/            reference app (com.soniq.example.youtubemusic
   InnerTubeClient.java             HTTP, client table, visitor data
   ExampleApp.java, MainActivity.java
 docs/PORTING.md                    history: Kobo Arc 7 Freedom → this framework
+CHANGELOG.md                       Keep a Changelog; [Unreleased] feeds the next release
+scripts/release.py                 changelog → commit → vX.Y.Z tag → push (see Releases)
 scripts/compile-check.py           android.jar-only compile check
+.github/workflows/build.yml        build + tests on every push / pull request
+.github/workflows/release.yml      on v* tags: build, publish to GitHub Packages, GitHub Release
 ```
 
 The UI is built programmatically — no XML layouts — so the library has no

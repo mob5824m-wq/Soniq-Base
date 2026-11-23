@@ -50,6 +50,15 @@ OkHttp, Gson or Kotlin.
 - **No bundled binaries.** No checked-in APKs, AARs, native libraries,
   keystores or third-party JARs. The Gradle wrapper is the only binary in the
   tree.
+- **Versions come from git tags.** The root `build.gradle.kts` derives every
+  module's version from the latest `vX.Y.Z` tag (`X.Y.Z` on the tagged commit,
+  `X.Y.Z-SNAPSHOT` after it). Never hard-code a version in a build file, and
+  never pass `-PsoniqVersion` outside a local experiment. A release is
+  `python3 scripts/release.py X.Y.Z --yes` (changelog → commit → tag → push);
+  do not create tags by hand, do not tag a dirty or stale tree, and add a
+  `CHANGELOG.md` entry under `[Unreleased]` for every user-visible change —
+  the release script moves it into the version's section and the Release
+  workflow uses it as the GitHub Release notes.
 - **Position reporting.** `PlaybackService.getPosition()` must go through
   `PlaybackPosition`; never read `MediaPlayer.getCurrentPosition()` directly
   for UI/MediaSession (it can read 0 right after start or the pre-seek value
@@ -102,9 +111,18 @@ ANDROID_HOME=$HOME/Android/Sdk python3 scripts/compile-check.py --tests --junit 
 python3 scripts/compile-check.py --ecj /path/to/ecj-4.30.jar --java /path/to/java
 ```
 
-CI runs the Gradle build for both modules and the unit tests on every pull
-request, and publishes the library to GitHub Packages on `v*` tags
-(`.github/workflows/build.yml`).
+CI runs the Gradle build for both modules (including the example's R8 release
+build) and the unit tests on every push to `main` and every pull request
+(`.github/workflows/build.yml`). Pushing a `vX.Y.Z` tag runs
+`.github/workflows/release.yml`: build + tests, publish `com.soniq.base:soniq-base`
+to GitHub Packages, create the GitHub Release with the changelog as notes and
+the AAR / sources / example APK attached.
+
+```bash
+python3 scripts/release.py 0.2.0          # dry run: validate + show the plan
+python3 scripts/release.py 0.2.0 --yes    # commit changelog on main, tag, push
+python3 scripts/release.py 0.2.0 --pr     # or: open a release PR (then --tag-only after merge)
+```
 
 ## Repository map
 
@@ -153,7 +171,11 @@ examples/youtube-music/src/main/java/com/soniq/example/youtubemusic/
   ExampleApp.java           extends SoniqApp, returns a YouTubeMusicProvider
   MainActivity.java         extends MusicActivity; parses youtu.be / watch links
 docs/PORTING.md             history: upstream class → replacement mapping
+CHANGELOG.md                Keep a Changelog; [Unreleased] is the next release
+scripts/release.py          changelog → commit → vX.Y.Z tag → push
 scripts/compile-check.py    android.jar-only compile check
+.github/workflows/build.yml      build + tests on push / pull request
+.github/workflows/release.yml    v* tags: publish + GitHub Release
 ```
 
 There are no XML layouts by design: the UI is built programmatically so the
@@ -202,5 +224,7 @@ Then, for library work:
 - [ ] Network and disk work stay off the main thread.
 - [ ] Foreground-service, notification-channel and immutable-PendingIntent
       rules still hold.
+- [ ] `CHANGELOG.md` has an entry under `[Unreleased]` for user-visible
+      changes.
 - [ ] `README.md` / `docs/PORTING.md` updated if the architecture or the
       published surface changed.

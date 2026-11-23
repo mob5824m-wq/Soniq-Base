@@ -1,9 +1,10 @@
+# Build + unit tests for every push to main and every pull request.
+# Releases (v* tags) are handled by release.yml.
 name: Build
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -11,6 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history so the tag-derived version is X.Y.Z-SNAPSHOT rather
+          # than 0.0.0-SNAPSHOT on branches.
+          fetch-depth: 0
 
       - uses: actions/setup-java@v6
         with:
@@ -26,11 +31,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
 
       # Always the wrapper: it pins Gradle 8.9, which AGP 8.7.3 requires.
+      # The example's release build (R8) is what Release workflows attach, so
+      # keep it verified on every PR as well.
       - name: Assemble library and example app
         run: |
           set -o pipefail
           ./gradlew :soniq-base:assembleDebug :examples:youtube-music:assembleDebug \
-              --no-daemon --stacktrace 2>&1 | tee build.log
+              :examples:youtube-music:assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
 
       - name: Run JVM unit tests
         run: |
@@ -59,33 +66,3 @@ jobs:
         with:
           name: soniq-base-debug-aar
           path: soniq-base/build/outputs/aar/*.aar
-
-  # Push a tag like v0.1.0 to publish that version to GitHub Packages.
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - uses: android-actions/setup-android@v4
-        with:
-          packages: platform-tools platforms;android-35 build-tools;35.0.0
-
-      - uses: gradle/actions/setup-gradle@v6
-
-      - name: Publish :soniq-base
-        env:
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          ./gradlew :soniq-base:publish --no-daemon --stacktrace
-          -PsoniqVersion="${GITHUB_REF_NAME#v}"

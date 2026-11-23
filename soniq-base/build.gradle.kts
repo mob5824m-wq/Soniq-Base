@@ -3,11 +3,8 @@ plugins {
     `maven-publish`
 }
 
-/**
- * Library version. Bump it here for a release; CI overrides it with the tag
- * name when publishing (`-PsoniqVersion=1.2.3` for `v1.2.3`).
- */
-val soniqVersion: String = (findProperty("soniqVersion") as String?) ?: "0.1.0"
+// The version comes from the latest `vX.Y.Z` git tag (see the root build script).
+val soniqVersion: String = rootProject.extra["soniqVersion"] as String
 
 // Maven coordinates, so `includeBuild()` substitutions and `publishToMavenLocal`
 // both resolve to com.soniq.base:soniq-base:<version>.
