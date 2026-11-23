@@ -1,4 +1,4 @@
-# agent.md — Soniq Base
+# AGENT.md — Soniq Base
 
 Instructions for AI coding agents working in this repository.
 
