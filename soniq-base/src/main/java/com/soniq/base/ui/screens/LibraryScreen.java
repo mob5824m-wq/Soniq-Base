@@ -130,7 +130,7 @@ public final class LibraryScreen extends Screen {
         LinearLayout header = Ui.row(host.context());
         header.setPadding(0, dp(4), 0, dp(8));
         header.addView(Ui.iconButton(host.context(), R.drawable.soniq_ic_arrow_back,
-                Theme.TEXT, 40, 22, new Runnable() {
+                Theme.TEXT, 40, 22, "Back", new Runnable() {
                     @Override
                     public void run() {
                         openPlaylist = null;

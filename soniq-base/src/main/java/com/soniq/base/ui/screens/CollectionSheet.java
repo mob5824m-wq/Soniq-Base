@@ -18,6 +18,7 @@ import com.soniq.base.ui.views.TrackRow;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Future;
 
 /** Album / playlist / artist detail, loaded from the public Music browse API. */
 public final class CollectionSheet {
@@ -31,6 +32,7 @@ public final class CollectionSheet {
     private final NetworkImage cover;
     private final List<MediaItem> tracks = new ArrayList<>();
     private int request;
+    private Future<?> browseTask;
 
     public CollectionSheet(Host host) {
         this.host = host;
@@ -50,7 +52,7 @@ public final class CollectionSheet {
 
         LinearLayout top = Ui.row(host.context());
         top.addView(Ui.iconButton(host.context(), R.drawable.soniq_ic_arrow_back,
-                Theme.TEXT, 44, 22, new Runnable() {
+                Theme.TEXT, 44, 22, "Back", new Runnable() {
                     @Override
                     public void run() {
                         hide();
@@ -137,8 +139,12 @@ public final class CollectionSheet {
     }
 
     public void show(MediaItem item) {
-        if (item == null) {
+        if (item == null || !host.isAlive()) {
             return;
+        }
+        if (browseTask != null) {
+            browseTask.cancel(true);
+            browseTask = null;
         }
         root.setVisibility(View.VISIBLE);
         titleView.setText(item.title);
@@ -154,7 +160,7 @@ public final class CollectionSheet {
             render(currentRequest);
             return;
         }
-        host.io().execute(new Runnable() {
+        browseTask = host.io().submit(new Runnable() {
             @Override
             public void run() {
                 List<MediaItem> loadedValue = null;
@@ -169,9 +175,10 @@ public final class CollectionSheet {
                 host.main().post(new Runnable() {
                     @Override
                     public void run() {
-                        if (currentRequest != request) {
+                        if (!host.isAlive() || currentRequest != request) {
                             return;
                         }
+                        browseTask = null;
                         if (failure != null) {
                             statusView.setText("Unavailable: " + failure.getMessage());
                             return;
@@ -230,6 +237,19 @@ public final class CollectionSheet {
 
     public void hide() {
         root.setVisibility(View.GONE);
+        request++;
+        if (browseTask != null) {
+            browseTask.cancel(true);
+            browseTask = null;
+        }
+    }
+
+    public void release() {
+        request++;
+        if (browseTask != null) {
+            browseTask.cancel(true);
+            browseTask = null;
+        }
     }
 
     public boolean isShowing() {

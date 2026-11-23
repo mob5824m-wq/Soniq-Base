@@ -3,6 +3,7 @@ package com.soniq.base.data;
 import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -42,6 +43,9 @@ public final class ListenBrainzApi {
 
     private static final int TIMEOUT_MS = 15000;
     private static final int MAX_RESPONSE_BYTES = 256 * 1024;
+    private static final long MIN_REQUEST_SPACING_MS = 1100L;
+    private static final Object REQUEST_SPACING_LOCK = new Object();
+    private static long lastRequestStartedMs;
 
     /** Result of {@code GET /validate-token}. */
     public static final class TokenResult {
@@ -206,6 +210,7 @@ public final class ListenBrainzApi {
         if (cleanToken.length() == 0) {
             throw new HttpFailure(401, "No ListenBrainz token is configured.", 0L);
         }
+        waitForRequestSlot();
         HttpURLConnection connection = null;
         InputStream input = null;
         try {
@@ -260,6 +265,31 @@ public final class ListenBrainzApi {
             if (connection != null) {
                 connection.disconnect();
             }
+        }
+    }
+
+    private static void waitForRequestSlot() throws InterruptedIOException {
+        synchronized (REQUEST_SPACING_LOCK) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedIOException("ListenBrainz request cancelled");
+            }
+            long elapsed = SystemClock.elapsedRealtime() - lastRequestStartedMs;
+            long wait = MIN_REQUEST_SPACING_MS - elapsed;
+            if (wait > 0L) {
+                try {
+                    Thread.sleep(wait);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    InterruptedIOException cancelled =
+                            new InterruptedIOException("ListenBrainz request cancelled");
+                    cancelled.initCause(interrupted);
+                    throw cancelled;
+                }
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedIOException("ListenBrainz request cancelled");
+            }
+            lastRequestStartedMs = SystemClock.elapsedRealtime();
         }
     }
 

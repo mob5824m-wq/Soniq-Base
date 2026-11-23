@@ -6,6 +6,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -29,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /** Full-screen now-playing sheet with artwork, transport, lyrics and actions. */
 public final class PlayerSheet {
@@ -39,6 +41,7 @@ public final class PlayerSheet {
     private final NetworkImage art;
     private final TextView title;
     private final TextView artist;
+    private final TextView album;
     private final TextView lyricBanner;
     private final TextView positionLabel;
     private final TextView durationLabel;
@@ -58,6 +61,8 @@ public final class PlayerSheet {
     private boolean lyricsVisible;
     private String lyricsKey = "";
     private int lyricsRequest;
+    private Future<?> lyricsTask;
+    private LyricsApi.CancellationSignal lyricsCancellation;
 
     public PlayerSheet(Host host) {
         this.host = host;
@@ -68,7 +73,7 @@ public final class PlayerSheet {
 
         GradientDrawable gradient = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xFF24101C, 0xFF0B0B0F, 0xFF0B0B0F});
+                new int[]{Theme.withAlpha(Theme.ACCENT, 0x38), Theme.BG, Theme.BG});
         root.setBackground(gradient);
 
         scroll = new ScrollView(host.context());
@@ -84,7 +89,7 @@ public final class PlayerSheet {
 
         LinearLayout topBar = Ui.row(host.context());
         topBar.addView(Ui.iconButton(host.context(), R.drawable.soniq_ic_close,
-                Theme.TEXT_DIM, 44, 22, new Runnable() {
+                Theme.TEXT_DIM, 44, 22, "Close player", new Runnable() {
                     @Override
                     public void run() {
                         hide();
@@ -96,7 +101,7 @@ public final class PlayerSheet {
         topBar.addView(nowPlaying, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         topBar.addView(Ui.iconButton(host.context(), R.drawable.soniq_ic_more,
-                Theme.TEXT_DIM, 44, 20, new Runnable() {
+                Theme.TEXT_DIM, 44, 20, "More track actions", new Runnable() {
                     @Override
                     public void run() {
                         MediaItem item = service() == null ? null : service().current();
@@ -114,6 +119,21 @@ public final class PlayerSheet {
         artParams.topMargin = Ui.dp(host.context(), 8);
         artParams.bottomMargin = Ui.dp(host.context(), 20);
         column.addView(art, artParams);
+        root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View view, int left, int top, int right, int bottom,
+                                       int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                int availableWidth = scroll.getWidth()
+                        - column.getPaddingLeft() - column.getPaddingRight();
+                int size = Math.max(1, Math.min(Ui.dp(host.context(), 300), availableWidth));
+                ViewGroup.LayoutParams params = art.getLayoutParams();
+                if (params.width != size || params.height != size) {
+                    params.width = size;
+                    params.height = size;
+                    art.setLayoutParams(params);
+                }
+            }
+        });
 
         lyricBanner = Ui.text(host.context(), "", 12f, Theme.ACCENT, true);
         lyricBanner.setGravity(Gravity.CENTER);
@@ -132,15 +152,22 @@ public final class PlayerSheet {
         artist.setMaxLines(1);
         artist.setEllipsize(android.text.TextUtils.TruncateAt.END);
         titles.addView(artist);
+        album = Ui.text(host.context(), "", 12f, Theme.TEXT_FAINT, false);
+        album.setSingleLine(true);
+        album.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        album.setVisibility(View.GONE);
+        titles.addView(album);
         titleRow.addView(titles, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         likeIcon = new ImageView(host.context());
         likeIcon.setImageResource(R.drawable.soniq_ic_favorite_border);
         likeIcon.setColorFilter(Theme.TEXT_DIM);
-        likeIcon.setPadding(Ui.dp(host.context(), 10), Ui.dp(host.context(), 10),
-                Ui.dp(host.context(), 10), Ui.dp(host.context(), 10));
-        likeIcon.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(host.context(), 44),
-                Ui.dp(host.context(), 44)));
+        likeIcon.setPadding(Ui.dp(host.context(), 12), Ui.dp(host.context(), 12),
+                Ui.dp(host.context(), 12), Ui.dp(host.context(), 12));
+        likeIcon.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(host.context(), 48),
+                Ui.dp(host.context(), 48)));
+        likeIcon.setContentDescription("Like this song");
+        likeIcon.setFocusable(true);
         likeIcon.setClickable(true);
         likeIcon.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -157,6 +184,7 @@ public final class PlayerSheet {
         seekBar = new SeekBar(host.context());
         seekBar.setMax(1);
         seekBar.setProgress(0);
+        seekBar.setContentDescription("Track position");
         seekBar.setPadding(Ui.dp(host.context(), 4), 0, Ui.dp(host.context(), 4), 0);
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -180,7 +208,7 @@ public final class PlayerSheet {
             }
         });
         LinearLayout.LayoutParams seekParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(host.context(), 28));
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(host.context(), 48));
         seekParams.topMargin = Ui.dp(host.context(), 8);
         column.addView(seekBar, seekParams);
 
@@ -199,32 +227,36 @@ public final class PlayerSheet {
         LinearLayout transport = Ui.row(host.context());
         transport.setGravity(Gravity.CENTER);
         transport.setPadding(0, Ui.dp(host.context(), 10), 0, Ui.dp(host.context(), 4));
-        shuffleIcon = transportIcon(R.drawable.soniq_ic_shuffle, Theme.TEXT_DIM, new Runnable() {
-            @Override
-            public void run() {
-                if (service() != null) {
-                    service().setShuffle(!service().isShuffle());
-                }
-            }
-        });
+        shuffleIcon = transportIcon(R.drawable.soniq_ic_shuffle, Theme.TEXT_DIM,
+                "Toggle shuffle", new Runnable() {
+                    @Override
+                    public void run() {
+                        if (service() != null) {
+                            service().setShuffle(!service().isShuffle());
+                        }
+                    }
+                });
         transport.addView(shuffleIcon);
-        transport.addView(transportIcon(R.drawable.soniq_ic_prev, Theme.TEXT, new Runnable() {
-            @Override
-            public void run() {
-                if (service() != null) {
-                    service().previous();
-                }
-            }
-        }));
+        transport.addView(transportIcon(R.drawable.soniq_ic_prev, Theme.TEXT,
+                "Previous track", new Runnable() {
+                    @Override
+                    public void run() {
+                        if (service() != null) {
+                            service().previous();
+                        }
+                    }
+                }));
         playIcon = new ImageView(host.context());
         playIcon.setImageResource(R.drawable.soniq_ic_play);
         playIcon.setColorFilter(Color.WHITE);
+        playIcon.setContentDescription("Play");
+        playIcon.setFocusable(true);
         int playSize = Ui.dp(host.context(), 72);
         playIcon.setPadding(Ui.dp(host.context(), 22), Ui.dp(host.context(), 22),
                 Ui.dp(host.context(), 22), Ui.dp(host.context(), 22));
         LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(playSize, playSize);
-        playParams.leftMargin = Ui.dp(host.context(), 18);
-        playParams.rightMargin = Ui.dp(host.context(), 18);
+        playParams.leftMargin = Ui.dp(host.context(), 8);
+        playParams.rightMargin = Ui.dp(host.context(), 8);
         playIcon.setLayoutParams(playParams);
         GradientDrawable playBackground = Ui.rounded(host.context(), Theme.ACCENT, 36f);
         playIcon.setBackground(new android.graphics.drawable.RippleDrawable(
@@ -240,24 +272,31 @@ public final class PlayerSheet {
             }
         });
         transport.addView(playIcon);
-        transport.addView(transportIcon(R.drawable.soniq_ic_next, Theme.TEXT, new Runnable() {
-            @Override
-            public void run() {
-                if (service() != null) {
-                    service().next();
-                }
-            }
-        }));
-        repeatIcon = transportIcon(R.drawable.soniq_ic_repeat, Theme.TEXT_DIM, new Runnable() {
-            @Override
-            public void run() {
-                if (service() != null) {
-                    service().cycleRepeat();
-                }
-            }
-        });
+        transport.addView(transportIcon(R.drawable.soniq_ic_next, Theme.TEXT,
+                "Next track", new Runnable() {
+                    @Override
+                    public void run() {
+                        if (service() != null) {
+                            service().next();
+                        }
+                    }
+                }));
+        repeatIcon = transportIcon(R.drawable.soniq_ic_repeat, Theme.TEXT_DIM,
+                "Cycle repeat mode", new Runnable() {
+                    @Override
+                    public void run() {
+                        if (service() != null) {
+                            service().cycleRepeat();
+                        }
+                    }
+                });
         transport.addView(repeatIcon);
-        column.addView(transport);
+        HorizontalScrollView transportScroll = new HorizontalScrollView(host.context());
+        transportScroll.setHorizontalScrollBarEnabled(false);
+        transportScroll.setFillViewport(true);
+        transportScroll.addView(transport, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        column.addView(transportScroll, Ui.matchWrap());
 
         LinearLayout actions = Ui.row(host.context());
         actions.setGravity(Gravity.CENTER);
@@ -292,7 +331,12 @@ public final class PlayerSheet {
                 }
             }
         }));
-        column.addView(actions);
+        HorizontalScrollView actionScroll = new HorizontalScrollView(host.context());
+        actionScroll.setHorizontalScrollBarEnabled(false);
+        actionScroll.setFillViewport(true);
+        actionScroll.addView(actions, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        column.addView(actionScroll, Ui.matchWrap());
 
         lyricsPanel = Ui.column(host.context());
         lyricsPanel.setVisibility(View.GONE);
@@ -312,18 +356,21 @@ public final class PlayerSheet {
         column.addView(lyricsPanel);
     }
 
-    private ImageView transportIcon(int resource, int tint, final Runnable onClick) {
+    private ImageView transportIcon(int resource, int tint, String description,
+                                    final Runnable onClick) {
         ImageView image = new ImageView(host.context());
         image.setImageResource(resource);
         image.setColorFilter(tint);
-        int size = Ui.dp(host.context(), 40);
-        image.setPadding(Ui.dp(host.context(), 8), Ui.dp(host.context(), 8),
-                Ui.dp(host.context(), 8), Ui.dp(host.context(), 8));
+        image.setContentDescription(description);
+        image.setFocusable(true);
+        int size = Ui.dp(host.context(), 48);
+        image.setPadding(Ui.dp(host.context(), 12), Ui.dp(host.context(), 12),
+                Ui.dp(host.context(), 12), Ui.dp(host.context(), 12));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
-        params.leftMargin = Ui.dp(host.context(), 8);
-        params.rightMargin = Ui.dp(host.context(), 8);
+        params.leftMargin = Ui.dp(host.context(), 2);
+        params.rightMargin = Ui.dp(host.context(), 2);
         image.setLayoutParams(params);
-        image.setBackground(Ui.ripple(host.context(), 0x00000000, 20f));
+        image.setBackground(Ui.ripple(host.context(), 0x00000000, 24f));
         image.setClickable(true);
         image.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -340,15 +387,19 @@ public final class PlayerSheet {
         button.setPadding(Ui.dp(host.context(), 12), Ui.dp(host.context(), 8),
                 Ui.dp(host.context(), 12), Ui.dp(host.context(), 8));
         button.setBackground(Ui.ripple(host.context(), 0x00000000, 14f));
+        button.setContentDescription(label);
         button.setClickable(true);
+        button.setFocusable(true);
         ImageView image = new ImageView(host.context());
         image.setImageResource(icon);
         image.setColorFilter(Theme.TEXT_DIM);
+        image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         image.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(host.context(), 22),
                 Ui.dp(host.context(), 22)));
         button.addView(image);
         TextView text = Ui.text(host.context(), label, 10f, Theme.TEXT_DIM, false);
         text.setPadding(0, Ui.dp(host.context(), 4), 0, 0);
+        text.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         button.addView(text);
         button.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -390,7 +441,12 @@ public final class PlayerSheet {
         if (item == null) {
             title.setText("Nothing playing");
             artist.setText("Pick a song to start");
+            album.setText("");
+            album.setVisibility(View.GONE);
+            art.setContentDescription("No album artwork");
             playIcon.setImageResource(R.drawable.soniq_ic_play);
+            playIcon.setContentDescription("Play");
+            likeIcon.setContentDescription("Like this song");
             seekBar.setProgress(0);
             positionLabel.setText("0:00");
             durationLabel.setText("0:00");
@@ -405,17 +461,30 @@ public final class PlayerSheet {
         if (!artistText.equals(artist.getText().toString())) {
             artist.setText(artistText);
         }
+        String albumText = item.album == null ? "" : item.album.trim();
+        album.setText(albumText);
+        album.setVisibility(albumText.length() > 0 ? View.VISIBLE : View.GONE);
+        art.setContentDescription("Artwork for " + item.title);
         art.load(item.bestThumb());
-        playIcon.setImageResource(service.isPlaying() ? R.drawable.soniq_ic_pause : R.drawable.soniq_ic_play);
+        boolean playbackRequested = service.isPlaybackRequested();
+        playIcon.setImageResource(playbackRequested
+                ? R.drawable.soniq_ic_pause : R.drawable.soniq_ic_play);
+        playIcon.setContentDescription(service.isPreparing() && playbackRequested
+                ? "Pause loading playback" : playbackRequested ? "Pause" : "Play");
         shuffleIcon.setColorFilter(service.isShuffle() ? Theme.ACCENT : Theme.TEXT_DIM);
+        shuffleIcon.setContentDescription(service.isShuffle() ? "Shuffle on" : "Turn shuffle on");
         int repeat = service.repeatMode();
         repeatIcon.setImageResource(repeat == PlaybackQueue.REPEAT_ONE
                 ? R.drawable.soniq_ic_repeat_one : R.drawable.soniq_ic_repeat);
         repeatIcon.setColorFilter(repeat == PlaybackQueue.REPEAT_OFF
                 ? Theme.TEXT_DIM : Theme.ACCENT);
+        repeatIcon.setContentDescription(repeat == PlaybackQueue.REPEAT_OFF
+                ? "Repeat off; cycle repeat mode" : repeat == PlaybackQueue.REPEAT_ONE
+                ? "Repeat one; cycle repeat mode" : "Repeat all; cycle repeat mode");
         boolean liked = host.isLiked(item);
         likeIcon.setImageResource(liked ? R.drawable.soniq_ic_favorite : R.drawable.soniq_ic_favorite_border);
         likeIcon.setColorFilter(liked ? Theme.ACCENT : Theme.TEXT_DIM);
+        likeIcon.setContentDescription(liked ? "Remove from liked songs" : "Like this song");
 
         int duration = service.getDuration();
         int position = service.getPosition();
@@ -427,8 +496,17 @@ public final class PlayerSheet {
             positionLabel.setText(Theme.formatDuration(position));
         }
         durationLabel.setText(duration > 0 ? Theme.formatDuration(duration) : "--:--");
-        statusLabel.setText(service.isPreparing()
-                ? service.getStatus() : scrobbleBadge(item));
+        String playbackStatus = service.getStatus();
+        String outputWarning = service.getOutputWarning();
+        String message = playbackStatus;
+        if (outputWarning.length() > 0) {
+            message = message.length() > 0
+                    ? message + " · " + outputWarning : outputWarning;
+        }
+        if (message.length() == 0) {
+            message = scrobbleBadge(item);
+        }
+        statusLabel.setText(message);
 
         updateLyrics(item, service, position);
     }
@@ -447,23 +525,54 @@ public final class PlayerSheet {
         if (!key.equals(lyricsKey)) {
             lyricsKey = key;
             lyrics.clear();
-            lyricsView.setLyrics(lyrics);
             lyricsRequest++;
+            if (lyricsCancellation != null) {
+                lyricsCancellation.cancel();
+                lyricsCancellation = null;
+            }
+            if (lyricsTask != null) {
+                lyricsTask.cancel(true);
+                lyricsTask = null;
+            }
+            lyricsView.setMessage("Looking for lyrics…");
             final int request = lyricsRequest;
             final String trackTitle = item.title;
             final String trackArtist = item.author;
-            lyricsExecutor.execute(new Runnable() {
+            final LyricsApi.CancellationSignal cancellation = new LyricsApi.CancellationSignal();
+            lyricsCancellation = cancellation;
+            lyricsTask = lyricsExecutor.submit(new Runnable() {
                 @Override
                 public void run() {
-                    final List<LyricLine> loaded = lyricsApi.fetch(trackTitle, trackArtist);
+                    List<LyricLine> loadedValue = null;
+                    String failureValue = null;
+                    try {
+                        loadedValue = lyricsApi.fetch(trackTitle, trackArtist, cancellation);
+                    } catch (java.io.IOException error) {
+                        failureValue = error.getMessage();
+                    }
+                    final List<LyricLine> loaded = loadedValue;
+                    final String failure = failureValue;
                     host.main().post(new Runnable() {
                         @Override
                         public void run() {
-                            if (request != lyricsRequest) {
+                            if (!host.isAlive() || request != lyricsRequest
+                                    || host.service() != service) {
+                                return;
+                            }
+                            lyricsTask = null;
+                            if (lyricsCancellation == cancellation) {
+                                lyricsCancellation = null;
+                            }
+                            if (failure != null) {
+                                lyrics.clear();
+                                lyricsView.setMessage("Lyrics unavailable: " + failure);
+                                lyricBanner.setText("");
                                 return;
                             }
                             lyrics.clear();
-                            lyrics.addAll(loaded);
+                            if (loaded != null) {
+                                lyrics.addAll(loaded);
+                            }
                             lyricsView.setLyrics(lyrics);
                             updateLyricHighlight(service.getPosition());
                         }
@@ -485,13 +594,12 @@ public final class PlayerSheet {
         }
     }
 
-    /** Small accent line confirming the current song was sent to ListenBrainz. */
+    /** Shows whether the current ListenBrainz listen is queued, submitted, or unavailable. */
     private String scrobbleBadge(MediaItem item) {
-        if (!host.settings().scrobblingEnabled() || item == null) {
+        if (item == null) {
             return "";
         }
-        return ScrobbleQueue.get(host.context()).isCurrentTrackScrobbled()
-                ? "Scrobbled to ListenBrainz ✓" : "";
+        return ScrobbleQueue.get(host.context()).currentTrackStatusMessage();
     }
 
     private PlaybackService service() {
@@ -499,6 +607,15 @@ public final class PlayerSheet {
     }
 
     public void release() {
+        lyricsRequest++;
+        if (lyricsCancellation != null) {
+            lyricsCancellation.cancel();
+            lyricsCancellation = null;
+        }
+        if (lyricsTask != null) {
+            lyricsTask.cancel(true);
+            lyricsTask = null;
+        }
         lyricsExecutor.shutdownNow();
     }
 }

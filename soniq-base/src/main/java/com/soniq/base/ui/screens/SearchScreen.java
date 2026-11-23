@@ -22,6 +22,7 @@ import com.soniq.base.ui.views.TrackRow;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Future;
 
 /** Catalogue search with song / artist / album / playlist filters. */
 public final class SearchScreen extends Screen {
@@ -38,6 +39,7 @@ public final class SearchScreen extends Screen {
     private String mode = MusicProvider.FILTER_SONGS;
     private boolean searching;
     private int request;
+    private Future<?> searchTask;
     private LinearLayout resultsContainer;
     private TextView statusView;
     private Chip[] chips;
@@ -64,6 +66,7 @@ public final class SearchScreen extends Screen {
         android.widget.ImageView searchIcon = new android.widget.ImageView(host.context());
         searchIcon.setImageResource(R.drawable.soniq_ic_search);
         searchIcon.setColorFilter(Theme.TEXT_DIM);
+        searchIcon.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(dp(22), dp(22));
         iconParams.gravity = Gravity.CENTER_VERTICAL;
         iconParams.leftMargin = dp(14);
@@ -71,6 +74,7 @@ public final class SearchScreen extends Screen {
 
         input = new EditText(host.context());
         input.setHint("Songs, artists, albums, playlists…");
+        input.setContentDescription("Search songs, artists, albums, or playlists");
         input.setHintTextColor(Theme.TEXT_FAINT);
         input.setTextColor(Theme.TEXT);
         input.setTextSize(14f);
@@ -165,29 +169,47 @@ public final class SearchScreen extends Screen {
     }
 
     private void performSearch() {
-        if (input == null) {
+        if (input == null || !host.isAlive()) {
             return;
         }
         String value = input.getText().toString().trim();
         if (value.length() == 0) {
+            request++;
+            if (searchTask != null) {
+                searchTask.cancel(true);
+                searchTask = null;
+            }
+            query = "";
+            searching = false;
+            results.clear();
+            if (statusView != null) {
+                statusView.setText("Enter a search term to begin.");
+            }
+            renderResults();
             host.showToast("Type a song, artist, album or playlist first.");
             return;
         }
         query = value;
         searching = true;
         final int currentRequest = ++request;
+        final String requestQuery = query;
+        final String requestMode = mode;
+        if (searchTask != null) {
+            searchTask.cancel(true);
+            searchTask = null;
+        }
         results.clear();
         if (statusView != null) {
-            statusView.setText("Searching " + mode + " for \"" + query + "\"…");
+            statusView.setText("Searching " + requestMode + " for \"" + requestQuery + "\"…");
         }
         renderResults();
-        runIo(new Runnable() {
+        searchTask = runIo(new Runnable() {
             @Override
             public void run() {
                 List<MediaItem> foundValue = null;
                 Exception failureValue = null;
                 try {
-                    foundValue = host.provider().search(query, mode);
+                    foundValue = host.provider().search(requestQuery, requestMode);
                 } catch (Exception error) {
                     failureValue = error;
                 }
@@ -199,6 +221,7 @@ public final class SearchScreen extends Screen {
                         if (currentRequest != request) {
                             return;
                         }
+                        searchTask = null;
                         searching = false;
                         results.clear();
                         if (failure == null && found != null) {
@@ -210,7 +233,7 @@ public final class SearchScreen extends Screen {
                             } else {
                                 statusView.setText(results.size() + " "
                                         + (results.size() == 1 ? "result" : "results")
-                                        + " · " + mode);
+                                        + " · " + requestMode);
                             }
                         }
                         renderResults();
@@ -218,6 +241,16 @@ public final class SearchScreen extends Screen {
                 });
             }
         });
+    }
+
+    @Override
+    public void release() {
+        request++;
+        if (searchTask != null) {
+            searchTask.cancel(true);
+            searchTask = null;
+        }
+        super.release();
     }
 
     private void renderResults() {

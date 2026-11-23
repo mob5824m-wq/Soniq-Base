@@ -19,6 +19,8 @@ import android.media.MediaPlayer;
 import android.media.audiofx.Equalizer;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
@@ -36,6 +38,7 @@ import com.soniq.base.model.MediaItem;
 import com.soniq.base.model.StreamSource;
 import com.soniq.base.SoniqApp;
 import com.soniq.base.data.ScrobbleQueue;
+import com.soniq.base.data.Settings;
 import com.soniq.base.provider.MusicProvider;
 
 import java.io.IOException;
@@ -43,6 +46,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 
 /**
@@ -88,8 +92,12 @@ public final class PlaybackService extends Service {
     /** The app's music source; resolves tracks to playable streams off the main thread. */
     private MusicProvider provider;
     private Library library;
+    private Settings settings;
 
     private MediaPlayer player;
+    private Future<?> resolveTask;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
     private MediaSession session;
     private NotificationManager notificationManager;
     private AudioManager audioManager;
@@ -101,11 +109,14 @@ public final class PlaybackService extends Service {
     private boolean prepared;
     private boolean playWhenReady = true;
     private boolean resolving;
+    private boolean buffering;
+    private boolean playbackError;
     private boolean foreground;
     private boolean focusHeld;
     private boolean pausedByFocusLoss;
     private int generation;
     private String status = "";
+    private String outputWarning = "";
 
     private Bitmap artwork;
     private String artworkKey = "";
@@ -113,6 +124,8 @@ public final class PlaybackService extends Service {
     private Equalizer equalizer;
     private int eqPreset;
     private String[] eqPresetNames;
+    private boolean equalizerSupported;
+    private boolean equalizerAttachFailed;
 
     private int sleepTimerMinutes;
     private long sleepEndAt;
@@ -140,6 +153,8 @@ public final class PlaybackService extends Service {
         super.onCreate();
         provider = SoniqApp.providerOf(this);
         library = new Library(this);
+        settings = new Settings(this);
+        eqPreset = Math.max(0, settings.equalizerPreset());
         notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         createNotificationChannel();
@@ -153,6 +168,7 @@ public final class PlaybackService extends Service {
         }
         scrobbles = ScrobbleQueue.get(this);
         scrobbles.flush();
+        registerConnectivityCallback();
         updateNotification();
     }
 
@@ -189,7 +205,7 @@ public final class PlaybackService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
-        if (!isPlaying() && !resolving) {
+        if (!isPlaybackRequested() && !isPreparing()) {
             stopSelf();
         }
     }
@@ -197,6 +213,14 @@ public final class PlaybackService extends Service {
     @Override
     public void onDestroy() {
         generation++;
+        if (scrobbles != null) {
+            scrobbles.playbackPaused();
+        }
+        if (resolveTask != null) {
+            resolveTask.cancel(true);
+            resolveTask = null;
+        }
+        unregisterConnectivityCallback();
         releasePlayer();
         releaseLocks();
         abandonFocus();
@@ -249,6 +273,46 @@ public final class PlaybackService extends Service {
             wifiLock = wifiManager.createWifiLock(mode, WIFI_LOCK_TAG);
             wifiLock.setReferenceCounted(false);
         }
+    }
+
+    private void registerConnectivityCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return;
+        }
+        connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) {
+            return;
+        }
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (scrobbles != null) {
+                            scrobbles.flush();
+                        }
+                    }
+                });
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback);
+        } catch (RuntimeException unavailable) {
+            connectivityManager = null;
+            networkCallback = null;
+        }
+    }
+
+    private void unregisterConnectivityCallback() {
+        if (connectivityManager != null && networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        networkCallback = null;
+        connectivityManager = null;
     }
 
     private void createMediaSession() {
@@ -420,7 +484,7 @@ public final class PlaybackService extends Service {
     /* ================================================================ controls */
 
     public void toggle() {
-        if (isPlaying()) {
+        if (isPlaybackRequested()) {
             pause();
         } else {
             play();
@@ -440,26 +504,48 @@ public final class PlaybackService extends Service {
             }
             return;
         }
-        if (!resolving) {
+        if (resolving) {
             MediaItem item = queue.current();
-            if (item != null) {
-                prepareCurrent();
-            }
+            status = item == null ? "Loading audio" : "Loading " + item.title;
+            updatePlaybackState();
+            updateNotification();
+            notifyChanged();
+            return;
+        }
+        MediaItem item = queue.current();
+        if (item != null) {
+            prepareCurrent();
         }
     }
 
     public void pause() {
         pausedByFocusLoss = false;
         playWhenReady = false;
+        if (scrobbles != null) {
+            scrobbles.playbackPaused();
+        }
+        if (resolving) {
+            status = "Paused · waiting for the stream";
+        }
         pauseInternal();
     }
 
     public void stop() {
         generation++;
+        if (scrobbles != null) {
+            scrobbles.playbackPaused();
+        }
+        if (resolveTask != null) {
+            resolveTask.cancel(true);
+            resolveTask = null;
+        }
         resolving = false;
+        buffering = false;
+        playbackError = false;
         playWhenReady = false;
         pausedByFocusLoss = false;
         status = "";
+        outputWarning = "";
         releasePlayer();
         queue.clear();
         abandonFocus();
@@ -596,8 +682,17 @@ public final class PlaybackService extends Service {
         }
     }
 
+    /** True when Play is the current transport action, including an in-flight start. */
+    public boolean isPlaybackRequested() {
+        return isPlaying() || (playWhenReady && (resolving || buffering));
+    }
+
     public boolean isPreparing() {
-        return resolving;
+        return resolving || buffering;
+    }
+
+    public boolean isBuffering() {
+        return buffering;
     }
 
     public boolean isPrepared() {
@@ -605,7 +700,25 @@ public final class PlaybackService extends Service {
     }
 
     public String getStatus() {
+        if (buffering) {
+            return "Buffering…";
+        }
         return status;
+    }
+
+    /** Warning shown when the OS media stream is muted or set to zero volume. */
+    public String getOutputWarning() {
+        if (!isPlaying() || audioManager == null) {
+            return "";
+        }
+        try {
+            if (audioManager.isStreamMute(AudioManager.STREAM_MUSIC)
+                    || audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) <= 0) {
+                return "Media volume is muted";
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return "";
     }
 
     /**
@@ -648,37 +761,86 @@ public final class PlaybackService extends Service {
 
     public String[] equalizerPresets() {
         if (eqPresetNames != null) {
-            return eqPresetNames;
+            return eqPresetNames.clone();
         }
+        Equalizer probe = null;
         try {
-            Equalizer probe = new Equalizer(0, 0);
+            probe = new Equalizer(0, 0);
             short count = probe.getNumberOfPresets();
-            String[] names = new String[count];
-            for (short i = 0; i < count; i++) {
-                names[i] = probe.getPresetName(i);
+            if (count > 0) {
+                String[] names = new String[count];
+                for (short i = 0; i < count; i++) {
+                    names[i] = probe.getPresetName(i);
+                }
+                eqPresetNames = names;
+                equalizerSupported = true;
+            } else {
+                eqPresetNames = new String[0];
+                equalizerSupported = false;
             }
-            probe.release();
-            eqPresetNames = names;
-        } catch (Exception | OutOfMemoryError error) {
-            eqPresetNames = new String[]{"Flat"};
+        } catch (Exception | OutOfMemoryError unavailable) {
+            eqPresetNames = new String[0];
+            equalizerSupported = false;
+        } finally {
+            if (probe != null) {
+                try {
+                    probe.release();
+                } catch (RuntimeException ignored) {
+                }
+            }
         }
-        return eqPresetNames;
+        if (eqPreset >= eqPresetNames.length) {
+            eqPreset = Math.max(0, eqPresetNames.length - 1);
+            settings.setEqualizerPreset(eqPreset);
+        }
+        return eqPresetNames.clone();
+    }
+
+    public boolean isEqualizerSupported() {
+        equalizerPresets();
+        return equalizerSupported;
+    }
+
+    public String equalizerStatus() {
+        String[] names = equalizerPresets();
+        if (!equalizerSupported) {
+            return "Equalizer unavailable on this device";
+        }
+        if (equalizerAttachFailed) {
+            return "Equalizer could not attach to this player";
+        }
+        String name = eqPreset >= 0 && eqPreset < names.length ? names[eqPreset] : "Preset";
+        if (equalizer != null) {
+            try {
+                return equalizer.getEnabled() ? name + " active" : name + " selected · effect off";
+            } catch (RuntimeException ignored) {
+                return "Equalizer state unavailable";
+            }
+        }
+        return prepared ? name + " selected · not active" : name + " selected · applies during playback";
     }
 
     public int equalizerPreset() {
-        return eqPreset;
+        String[] names = equalizerPresets();
+        return names.length == 0 ? 0 : Math.min(eqPreset, names.length - 1);
     }
 
     public void setEqualizerPreset(int index) {
         String[] names = equalizerPresets();
-        if (names.length == 0) {
+        if (!equalizerSupported || names.length == 0) {
             return;
         }
         eqPreset = Math.max(0, Math.min(index, names.length - 1));
+        settings.setEqualizerPreset(eqPreset);
+        equalizerAttachFailed = false;
         applyEqualizerPreset();
+        notifyChanged();
     }
 
     private void applyEqualizerPreset() {
+        if (!equalizerSupported) {
+            return;
+        }
         if (equalizer == null) {
             attachEqualizer();
         }
@@ -690,38 +852,49 @@ public final class PlaybackService extends Service {
             if (eqPreset >= 0 && eqPreset < count) {
                 equalizer.usePreset((short) eqPreset);
                 equalizer.setEnabled(true);
+                equalizerAttachFailed = !equalizer.getEnabled();
             } else {
+                equalizerAttachFailed = true;
                 equalizer.setEnabled(false);
             }
-        } catch (Exception ignored) {
+        } catch (Exception | OutOfMemoryError error) {
+            equalizerAttachFailed = true;
+            try {
+                equalizer.release();
+            } catch (RuntimeException ignored) {
+            }
+            equalizer = null;
         }
     }
 
     private void attachEqualizer() {
-        if (player == null || !prepared) {
+        if (player == null || !prepared || !isEqualizerSupported()) {
             return;
         }
         int sessionId;
         try {
             sessionId = player.getAudioSessionId();
-        } catch (Exception ignored) {
+        } catch (RuntimeException error) {
+            equalizerAttachFailed = true;
             return;
         }
         if (sessionId == 0) {
+            equalizerAttachFailed = true;
             return;
         }
         if (equalizer != null) {
             try {
                 equalizer.release();
-            } catch (Exception ignored) {
+            } catch (RuntimeException ignored) {
             }
             equalizer = null;
         }
         try {
             equalizer = new Equalizer(0, sessionId);
-            applyEqualizerPreset();
-        } catch (Exception | OutOfMemoryError ignored) {
+            equalizerAttachFailed = false;
+        } catch (Exception | OutOfMemoryError unavailable) {
             equalizer = null;
+            equalizerAttachFailed = true;
         }
     }
 
@@ -729,8 +902,15 @@ public final class PlaybackService extends Service {
 
     private void prepareCurrent() {
         generation++;
+        if (resolveTask != null) {
+            resolveTask.cancel(true);
+            resolveTask = null;
+        }
         final int request = generation;
         releasePlayer();
+        playbackError = false;
+        buffering = false;
+        outputWarning = "";
         final MediaItem item = queue.current();
         if (item == null) {
             status = "";
@@ -764,7 +944,7 @@ public final class PlaybackService extends Service {
         }
 
         final MediaItem toResolve = item;
-        io.execute(new Runnable() {
+        resolveTask = io.submit(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -773,6 +953,7 @@ public final class PlaybackService extends Service {
                         @Override
                         public void run() {
                             if (request == generation) {
+                                resolveTask = null;
                                 startStream(applyResolvedMetadata(item, track), track, request);
                             }
                         }
@@ -782,6 +963,7 @@ public final class PlaybackService extends Service {
                         @Override
                         public void run() {
                             if (request == generation) {
+                                resolveTask = null;
                                 failCurrent(error);
                             }
                         }
@@ -793,15 +975,20 @@ public final class PlaybackService extends Service {
 
     private void startLocal(MediaItem item, int request) {
         releasePlayer();
-        MediaPlayer mediaPlayer = new MediaPlayer();
+        final MediaPlayer mediaPlayer;
+        try {
+            mediaPlayer = new MediaPlayer();
+        } catch (RuntimeException error) {
+            failCurrent(error);
+            return;
+        }
+        player = mediaPlayer;
         try {
             mediaPlayer.setAudioAttributes(audioAttributes());
             mediaPlayer.setDataSource(this, Uri.parse(item.localUri));
             attachPlayerListeners(mediaPlayer, request);
-            player = mediaPlayer;
             mediaPlayer.prepareAsync();
         } catch (Exception error) {
-            player = null;
             failCurrent(error);
         }
     }
@@ -853,7 +1040,14 @@ public final class PlaybackService extends Service {
             return;
         }
         releasePlayer();
-        MediaPlayer mediaPlayer = new MediaPlayer();
+        final MediaPlayer mediaPlayer;
+        try {
+            mediaPlayer = new MediaPlayer();
+        } catch (RuntimeException error) {
+            failCurrent(error);
+            return;
+        }
+        player = mediaPlayer;
         try {
             mediaPlayer.setAudioAttributes(audioAttributes());
             if (track.hls) {
@@ -862,10 +1056,8 @@ public final class PlaybackService extends Service {
                 mediaPlayer.setDataSource(this, Uri.parse(track.url), track.headers);
             }
             attachPlayerListeners(mediaPlayer, request);
-            player = mediaPlayer;
             mediaPlayer.prepareAsync();
         } catch (Exception error) {
-            player = null;
             failCurrent(error);
         }
     }
@@ -886,10 +1078,20 @@ public final class PlaybackService extends Service {
                 }
                 prepared = true;
                 resolving = false;
+                buffering = false;
+                playbackError = false;
                 status = "";
-                attachEqualizer();
-                if (playWhenReady && requestFocus()) {
-                    startPlaybackNow(mediaPlayer);
+                applyEqualizerPreset();
+                if (playWhenReady) {
+                    if (requestFocus()) {
+                        startPlaybackNow(mediaPlayer);
+                    } else {
+                        status = "Audio focus unavailable; tap Play to retry";
+                        updatePlaybackState();
+                        updateMetadata();
+                        updateNotification();
+                        notifyChanged();
+                    }
                 } else {
                     updatePlaybackState();
                     updateMetadata();
@@ -901,7 +1103,7 @@ public final class PlaybackService extends Service {
         mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
             @Override
             public void onCompletion(MediaPlayer mp) {
-                if (player == mediaPlayer) {
+                if (player == mediaPlayer && request == generation && !playbackError) {
                     onTrackEnded();
                 }
             }
@@ -909,32 +1111,45 @@ public final class PlaybackService extends Service {
         mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
             @Override
             public boolean onError(MediaPlayer mp, int what, int extra) {
-                if (player == mediaPlayer) {
-                    status = "Playback error (" + what + "/" + extra + ")";
+                if (player == mediaPlayer && request == generation) {
+                    failCurrent(new IOException("Playback decoder error (" + what + "/"
+                            + extra + "). Press Next to continue."));
+                }
+                return true;
+            }
+        });
+        mediaPlayer.setOnInfoListener(new MediaPlayer.OnInfoListener() {
+            @Override
+            public boolean onInfo(MediaPlayer mp, int what, int extra) {
+                if (player != mediaPlayer || request != generation) {
+                    return false;
+                }
+                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                    buffering = true;
                     updatePlaybackState();
                     updateNotification();
                     notifyChanged();
-                    final int failedGeneration = generation;
-                    main.postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (failedGeneration != generation) {
-                                return;
-                            }
-                            MediaItem nextItem = queue.next(true);
-                            if (nextItem != null) {
-                                prepareCurrent();
-                            }
-                        }
-                    }, 1200L);
+                    return true;
                 }
-                return true;
+                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                    buffering = false;
+                    updatePlaybackState();
+                    updateNotification();
+                    notifyChanged();
+                    return true;
+                }
+                return false;
             }
         });
         mediaPlayer.setOnBufferingUpdateListener(new MediaPlayer.OnBufferingUpdateListener() {
             @Override
             public void onBufferingUpdate(MediaPlayer mp, int percent) {
-                // The framework owns buffering; nothing to surface in the UI yet.
+                if (player == mediaPlayer && request == generation && buffering && percent >= 100) {
+                    buffering = false;
+                    updatePlaybackState();
+                    updateNotification();
+                    notifyChanged();
+                }
             }
         });
     }
@@ -947,6 +1162,10 @@ public final class PlaybackService extends Service {
             if (!mediaPlayer.isPlaying()) {
                 mediaPlayer.start();
             }
+            buffering = false;
+            playbackError = false;
+            status = "";
+            outputWarning = getOutputWarning();
             long now = SystemClock.elapsedRealtime();
             int nativePosition = nativePosition();
             position.anchor(nativePosition > 0 ? nativePosition
@@ -978,6 +1197,12 @@ public final class PlaybackService extends Service {
                 lastTickRealtime = 0L;
                 return;
             }
+            String nextOutputWarning = getOutputWarning();
+            if (!nextOutputWarning.equals(outputWarning)) {
+                outputWarning = nextOutputWarning;
+                updateNotification();
+                notifyChanged();
+            }
             long now = SystemClock.elapsedRealtime();
             long delta = lastTickRealtime > 0L ? now - lastTickRealtime : 0L;
             lastTickRealtime = now;
@@ -1003,6 +1228,8 @@ public final class PlaybackService extends Service {
 
     private void pauseInternal() {
         stopTicker();
+        buffering = false;
+        outputWarning = "";
         position.setPlaying(false, SystemClock.elapsedRealtime());
         if (player != null && prepared) {
             try {
@@ -1032,6 +1259,9 @@ public final class PlaybackService extends Service {
         MediaItem nextItem = queue.next(false);
         if (nextItem == null) {
             playWhenReady = false;
+            if (scrobbles != null) {
+                scrobbles.playbackPaused();
+            }
             status = "Queue finished";
             releaseLocks();
             updatePlaybackState();
@@ -1045,11 +1275,23 @@ public final class PlaybackService extends Service {
     private void failCurrent(Exception error) {
         resolving = false;
         prepared = false;
-        String message = error == null ? "Unknown error" : error.getMessage();
-        if (message == null) {
-            message = error.getClass().getSimpleName();
+        if (scrobbles != null) {
+            scrobbles.playbackPaused();
+        }
+        buffering = false;
+        playbackError = true;
+        playWhenReady = false;
+        outputWarning = "";
+        stopTicker();
+        position.setPlaying(false, SystemClock.elapsedRealtime());
+        releaseLocks();
+        abandonFocus();
+        String message = error == null ? "Unknown playback error" : error.getMessage();
+        if (message == null || message.trim().length() == 0) {
+            message = error == null ? "Unknown playback error" : error.getClass().getSimpleName();
         }
         status = message;
+        releasePlayer();
         updatePlaybackState();
         updateNotification();
         notifyChanged();
@@ -1057,6 +1299,8 @@ public final class PlaybackService extends Service {
 
     private void releasePlayer() {
         stopTicker();
+        buffering = false;
+        outputWarning = "";
         position.reset();
         if (equalizer != null) {
             try {
@@ -1133,7 +1377,12 @@ public final class PlaybackService extends Service {
                 break;
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
                 pausedByFocusLoss = true;
+                if (scrobbles != null) {
+                    scrobbles.playbackPaused();
+                }
                 stopTicker();
+                buffering = false;
+                outputWarning = "";
                 position.setPlaying(false, SystemClock.elapsedRealtime());
                 if (player != null && prepared) {
                     try {
@@ -1207,18 +1456,23 @@ public final class PlaybackService extends Service {
                 | PlaybackState.ACTION_SEEK_TO
                 | PlaybackState.ACTION_STOP;
         int state;
-        if (isPlaying()) {
-            state = PlaybackState.STATE_PLAYING;
-        } else if (resolving) {
+        if (playbackError) {
+            state = PlaybackState.STATE_ERROR;
+        } else if (playWhenReady && (resolving || buffering)) {
             state = PlaybackState.STATE_BUFFERING;
+        } else if (isPlaying()) {
+            state = PlaybackState.STATE_PLAYING;
         } else {
             state = PlaybackState.STATE_PAUSED;
         }
-        float speed = isPlaying() ? 1f : 0f;
-        session.setPlaybackState(new PlaybackState.Builder()
+        float speed = isPlaying() && !buffering ? 1f : 0f;
+        PlaybackState.Builder builder = new PlaybackState.Builder()
                 .setState(state, getPosition(), speed)
-                .setActions(actions)
-                .build());
+                .setActions(actions);
+        if (playbackError && status.length() > 0) {
+            builder.setErrorMessage(status);
+        }
+        session.setPlaybackState(builder.build());
     }
 
     private void updateMetadata() {
@@ -1313,12 +1567,13 @@ public final class PlaybackService extends Service {
         String title = item == null ? appLabel() : item.title;
         String subtitle = item == null || item.author.length() == 0
                 ? getString(R.string.soniq_notification_default_subtitle) : item.author;
+        boolean playbackRequested = isPlaybackRequested();
 
         Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.soniq_ic_music_note)
                 .setContentTitle(title)
                 .setContentText(subtitle)
-                .setOngoing(isPlaying())
+                .setOngoing(playbackRequested)
                 .setOnlyAlertOnce(true)
                 .setShowWhen(false)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -1327,14 +1582,21 @@ public final class PlaybackService extends Service {
                 .setDeleteIntent(servicePendingIntent(ACTION_STOP))
                 .addAction(action(R.drawable.soniq_ic_prev, getString(R.string.soniq_action_previous),
                         servicePendingIntent(ACTION_PREVIOUS)))
-                .addAction(action(isPlaying() ? R.drawable.soniq_ic_pause : R.drawable.soniq_ic_play,
-                        isPlaying() ? getString(R.string.soniq_action_pause)
+                .addAction(action(playbackRequested
+                                ? R.drawable.soniq_ic_pause : R.drawable.soniq_ic_play,
+                        playbackRequested ? getString(R.string.soniq_action_pause)
                                 : getString(R.string.soniq_action_play),
                         servicePendingIntent(ACTION_TOGGLE)))
                 .addAction(action(R.drawable.soniq_ic_next, getString(R.string.soniq_action_next),
                         servicePendingIntent(ACTION_NEXT)));
-        if (status.length() > 0) {
-            builder.setSubText(status);
+        String details = getStatus();
+        String audioWarning = getOutputWarning();
+        if (audioWarning.length() > 0) {
+            details = details.length() > 0
+                    ? details + " · " + audioWarning : audioWarning;
+        }
+        if (details.length() > 0) {
+            builder.setSubText(details);
         }
         if (artwork != null) {
             builder.setLargeIcon(artwork);

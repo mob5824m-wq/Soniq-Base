@@ -3,6 +3,8 @@ package com.soniq.base.data;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.content.SharedPreferences;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
@@ -23,6 +25,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.Proxy;
@@ -43,6 +46,43 @@ public final class Downloads {
 
     public interface Callback {
         void onProgress(int percent, long downloadedBytes, long totalBytes);
+    }
+
+    /** Cancellation handle for a single resolution/download/copy operation. */
+    public static final class CancellationSignal {
+        private volatile boolean cancelled;
+        private volatile HttpURLConnection connection;
+
+        public void cancel() {
+            cancelled = true;
+            HttpURLConnection active = connection;
+            if (active != null) {
+                active.disconnect();
+            }
+        }
+
+        public boolean isCancelled() {
+            return cancelled;
+        }
+
+        private void check() throws InterruptedIOException {
+            if (cancelled || Thread.currentThread().isInterrupted()) {
+                throw new InterruptedIOException("Download cancelled");
+            }
+        }
+
+        private void attach(HttpURLConnection active) {
+            connection = active;
+            if (cancelled) {
+                active.disconnect();
+            }
+        }
+
+        private void detach(HttpURLConnection active) {
+            if (connection == active) {
+                connection = null;
+            }
+        }
     }
 
     private static final String PREFS = "soniq_downloads";
@@ -122,6 +162,17 @@ public final class Downloads {
      * thread. Returns a copy of the item with {@link MediaItem#localUri} set.
      */
     public MediaItem downloadSync(MediaItem item, Callback callback) throws IOException {
+        return downloadSync(item, callback, null);
+    }
+
+    /**
+     * Resolves, downloads, validates and registers a track. Blocking; call from a
+     * worker thread. Cancellation interrupts stream I/O and prevents publishing
+     * or indexing an incomplete result.
+     */
+    public MediaItem downloadSync(MediaItem item, Callback callback,
+                                  CancellationSignal cancellation) throws IOException {
+        checkCancelled(cancellation);
         if (item == null || item.id.length() == 0) {
             throw new IOException("Play an online song before downloading it.");
         }
@@ -130,6 +181,7 @@ public final class Downloads {
             return existing;
         }
         StreamSource track = provider.resolve(item);
+        checkCancelled(cancellation);
         if (track == null || !track.hasStream()) {
             throw new IOException("No downloadable audio stream was returned.");
         }
@@ -138,36 +190,65 @@ public final class Downloads {
         }
 
         File partial = new File(context.getCacheDir(), "download-" + UUID.randomUUID() + ".part");
+        Uri publishedUri = null;
+        boolean indexed = false;
         try {
-            downloadTo(track, partial, callback);
-            String extension = track.mimeType.startsWith("audio/webm") ? "webm" : "m4a";
-            String displayName = sanitize((track.author.length() > 0
-                    ? track.author + " - " : track.title.length() > 0
-                    ? track.title : item.title)) + "." + extension;
-            Uri uri;
+            downloadTo(track, partial, callback, cancellation);
+            checkCancelled(cancellation);
+            validateMedia(partial, cancellation);
+            checkCancelled(cancellation);
+
+            String mimeType = track.mimeType == null ? "" : track.mimeType.trim();
+            if (mimeType.length() == 0) {
+                mimeType = "audio/mp4";
+            }
+            String lowerMime = mimeType.toLowerCase(java.util.Locale.US);
+            String extension = lowerMime.startsWith("audio/webm") ? "webm"
+                    : lowerMime.startsWith("audio/mpeg") || lowerMime.startsWith("audio/mp3") ? "mp3"
+                    : lowerMime.startsWith("audio/ogg") ? "ogg"
+                    : lowerMime.startsWith("audio/flac") ? "flac"
+                    : lowerMime.startsWith("audio/aac") ? "aac" : "m4a";
+            String trackTitle = track.title == null ? "" : track.title.trim();
+            String trackAuthor = track.author == null ? "" : track.author.trim();
+            String displayName = sanitize(trackAuthor.length() > 0
+                    ? trackAuthor + " - " : trackTitle.length() > 0
+                    ? trackTitle : item.title) + "." + extension;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    uri = insertIntoMediaStore(displayName, track.mimeType, partial);
+                    publishedUri = insertIntoMediaStore(displayName, mimeType, partial, cancellation);
+                } catch (InterruptedIOException cancelled) {
+                    throw cancelled;
                 } catch (IOException | RuntimeException mediaStoreFailure) {
-                    uri = copyToAppMusic(displayName, partial);
+                    checkCancelled(cancellation);
+                    publishedUri = copyToAppMusic(displayName, partial, mimeType, cancellation);
                 }
             } else {
-                uri = copyToAppMusic(displayName, partial);
+                publishedUri = copyToAppMusic(displayName, partial, mimeType, cancellation);
             }
+            checkCancelled(cancellation);
 
             MediaItem saved = item.copy();
-            saved.title = track.title.length() > 0 ? track.title : item.title;
-            saved.author = track.author.length() > 0 ? track.author : item.author;
-            saved.thumbnailUrl = track.artworkUrl.length() > 0
+            saved.title = track.title != null && track.title.length() > 0 ? track.title : item.title;
+            saved.author = track.author != null && track.author.length() > 0
+                    ? track.author : item.author;
+            saved.album = track.album != null && track.album.length() > 0 ? track.album : item.album;
+            saved.thumbnailUrl = track.artworkUrl != null && track.artworkUrl.length() > 0
                     ? track.artworkUrl : item.thumbnailUrl;
             saved.durationSec = track.durationSec > 0 ? track.durationSec : item.durationSec;
-            saved.localUri = uri.toString();
+            saved.localUri = publishedUri.toString();
 
+            checkCancelled(cancellation);
             List<MediaItem> index = readIndex();
             index.add(0, saved);
             writeIndex(index);
+            indexed = true;
             return saved;
         } finally {
+            if (!indexed && publishedUri != null) {
+                MediaItem unpublished = new MediaItem();
+                unpublished.localUri = publishedUri.toString();
+                deleteStoredFile(unpublished);
+            }
             if (partial.exists() && !partial.delete()) {
                 partial.deleteOnExit();
             }
@@ -212,14 +293,17 @@ public final class Downloads {
         }
     }
 
-    private void downloadTo(StreamSource track, File target, Callback callback)
-            throws IOException {
+    private void downloadTo(StreamSource track, File target, Callback callback,
+                            CancellationSignal cancellation) throws IOException {
         HttpURLConnection connection = null;
         InputStream input = null;
         OutputStream output = null;
         try {
-            connection = (HttpURLConnection) new URL(track.url)
-                    .openConnection(Proxy.NO_PROXY);
+            checkCancelled(cancellation);
+            connection = (HttpURLConnection) new URL(track.url).openConnection(Proxy.NO_PROXY);
+            if (cancellation != null) {
+                cancellation.attach(connection);
+            }
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(30000);
             connection.setInstanceFollowRedirects(true);
@@ -227,22 +311,28 @@ public final class Downloads {
                 connection.setRequestProperty(header.getKey(), header.getValue());
             }
             int code = connection.getResponseCode();
-            if (code < 200 || code >= 400) {
+            checkCancelled(cancellation);
+            if (code < 200 || code >= 300) {
                 throw new IOException("HTTP " + code + " while downloading audio");
             }
-            long total = connection.getContentLength();
+            long total = connection.getContentLengthLong();
             input = connection.getInputStream();
             output = new FileOutputStream(target);
             byte[] buffer = new byte[64 * 1024];
             long done = 0L;
             int read;
             while ((read = input.read(buffer)) > 0) {
+                checkCancelled(cancellation);
                 output.write(buffer, 0, read);
                 done += read;
                 if (callback != null) {
                     int percent = total > 0 ? (int) Math.min(99L, done * 100L / total) : -1;
                     callback.onProgress(percent, done, total);
                 }
+            }
+            checkCancelled(cancellation);
+            if (done <= 0L || (total > 0L && done != total)) {
+                throw new IOException("The downloaded audio is empty or incomplete.");
             }
             output.flush();
         } finally {
@@ -259,13 +349,16 @@ public final class Downloads {
                 }
             }
             if (connection != null) {
+                if (cancellation != null) {
+                    cancellation.detach(connection);
+                }
                 connection.disconnect();
             }
         }
     }
 
-    private Uri insertIntoMediaStore(String displayName, String mimeType, File source)
-            throws IOException {
+    private Uri insertIntoMediaStore(String displayName, String mimeType, File source,
+                                     CancellationSignal cancellation) throws IOException {
         ContentResolver resolver = context.getContentResolver();
         ContentValues values = new ContentValues();
         values.put(MediaStore.Audio.Media.DISPLAY_NAME, displayName);
@@ -289,8 +382,10 @@ public final class Downloads {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
                 while ((read = input.read(buffer)) > 0) {
+                    checkCancelled(cancellation);
                     output.write(buffer, 0, read);
                 }
+                checkCancelled(cancellation);
                 output.flush();
             } finally {
                 if (output != null) {
@@ -308,7 +403,9 @@ public final class Downloads {
             }
             ContentValues done = new ContentValues();
             done.put(MediaStore.Audio.Media.IS_PENDING, 0);
-            resolver.update(uri, done, null, null);
+            if (resolver.update(uri, done, null, null) <= 0) {
+                throw new IOException("Could not publish the completed download in MediaStore");
+            }
             success = true;
             return uri;
         } finally {
@@ -321,7 +418,8 @@ public final class Downloads {
         }
     }
 
-    private Uri copyToAppMusic(String displayName, File source) throws IOException {
+    private Uri copyToAppMusic(String displayName, File source, String mimeType,
+                               CancellationSignal cancellation) throws IOException {
         File directory = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC);
         if (directory == null) {
             throw new IOException("Download folder is unavailable");
@@ -329,26 +427,40 @@ public final class Downloads {
         if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
             throw new IOException("Download folder is unavailable");
         }
-        File target = new File(directory, displayName);
-        int suffix = 1;
-        while (target.exists()) {
-            int dot = displayName.lastIndexOf('.');
-            String base = dot > 0 ? displayName.substring(0, dot) : displayName;
-            String extension = dot > 0 ? displayName.substring(dot) : "";
-            target = new File(directory, base + " (" + suffix + ")" + extension);
-            suffix++;
+        int dot = displayName.lastIndexOf('.');
+        String base = dot > 0 ? displayName.substring(0, dot) : displayName;
+        String extension = dot > 0 ? displayName.substring(dot) : "";
+        File target = null;
+        for (int suffix = 0; suffix < 10000; suffix++) {
+            checkCancelled(cancellation);
+            String candidateName = suffix == 0 ? displayName
+                    : base + " (" + suffix + ")" + extension;
+            File candidate = new File(directory, candidateName);
+            if (candidate.createNewFile()) {
+                target = candidate;
+                break;
+            }
         }
+        if (target == null) {
+            throw new IOException("Could not choose a unique download filename");
+        }
+
         FileInputStream input = null;
         FileOutputStream output = null;
+        boolean success = false;
         try {
+            checkCancelled(cancellation);
             input = new FileInputStream(source);
-            output = new FileOutputStream(target);
+            output = new FileOutputStream(target, false);
             byte[] buffer = new byte[64 * 1024];
             int read;
             while ((read = input.read(buffer)) > 0) {
+                checkCancelled(cancellation);
                 output.write(buffer, 0, read);
             }
+            checkCancelled(cancellation);
             output.flush();
+            success = true;
         } finally {
             if (output != null) {
                 try {
@@ -362,10 +474,54 @@ public final class Downloads {
                 } catch (IOException ignored) {
                 }
             }
+            if (!success && target.exists() && !target.delete()) {
+                target.deleteOnExit();
+            }
         }
         MediaScannerConnection.scanFile(context, new String[]{target.getAbsolutePath()},
-                new String[]{"audio/mp4"}, null);
+                new String[]{mimeType == null || mimeType.length() == 0 ? "audio/mp4" : mimeType},
+                null);
         return Uri.fromFile(target);
+    }
+
+    private static void checkCancelled(CancellationSignal cancellation) throws InterruptedIOException {
+        if (cancellation != null) {
+            cancellation.check();
+        } else if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("Download cancelled");
+        }
+    }
+
+    /** Verifies the downloaded bytes using the same platform decoder used for playback. */
+    private static void validateMedia(File file, CancellationSignal cancellation) throws IOException {
+        checkCancelled(cancellation);
+        if (!file.isFile() || file.length() <= 0L) {
+            throw new IOException("The downloaded audio file is empty.");
+        }
+        MediaPlayer validator = new MediaPlayer();
+        try {
+            validator.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build());
+            validator.setDataSource(file.getAbsolutePath());
+            validator.prepare();
+            checkCancelled(cancellation);
+            if (validator.getDuration() <= 0) {
+                throw new IOException("The downloaded file has no playable audio duration.");
+            }
+        } catch (InterruptedIOException cancelled) {
+            throw cancelled;
+        } catch (IOException error) {
+            throw new IOException("The downloaded file could not be decoded as audio.", error);
+        } catch (RuntimeException error) {
+            throw new IOException("The downloaded file could not be decoded as audio.", error);
+        } finally {
+            try {
+                validator.release();
+            } catch (RuntimeException ignored) {
+            }
+        }
     }
 
     private static boolean exists(String localUri) {

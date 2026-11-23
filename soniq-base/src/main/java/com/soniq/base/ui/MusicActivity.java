@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * The framework's single-activity UI: Home / Search / Library / Settings tabs,
@@ -91,12 +92,18 @@ public class MusicActivity extends android.app.Activity implements Host {
 
     private PlaybackService service;
     private boolean bound;
+    private volatile boolean destroyed;
+    private Downloads.CancellationSignal activeDownloadSignal;
+    private Future<?> activeDownloadTask;
     private List<MediaItem> pendingQueue;
     private int pendingIndex;
 
     private final Runnable ticker = new Runnable() {
         @Override
         public void run() {
+            if (destroyed) {
+                return;
+            }
             if (miniPlayer != null) {
                 miniPlayer.update(service);
             }
@@ -107,22 +114,31 @@ public class MusicActivity extends android.app.Activity implements Host {
         }
     };
 
+    private final PlaybackService.Listener playbackListener = new PlaybackService.Listener() {
+        @Override
+        public void onPlaybackChanged() {
+            if (destroyed) {
+                return;
+            }
+            if (miniPlayer != null) {
+                miniPlayer.update(service);
+            }
+            if (playerSheet != null && playerSheet.isShowing()) {
+                playerSheet.update();
+            }
+        }
+    };
+
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder binder) {
             service = ((PlaybackService.LocalBinder) binder).service();
             bound = true;
-            service.addListener(new PlaybackService.Listener() {
-                @Override
-                public void onPlaybackChanged() {
-                    if (miniPlayer != null) {
-                        miniPlayer.update(service);
-                    }
-                    if (playerSheet != null && playerSheet.isShowing()) {
-                        playerSheet.update();
-                    }
-                }
-            });
+            if (destroyed) {
+                service.removeListener(playbackListener);
+                return;
+            }
+            service.addListener(playbackListener);
             if (pendingQueue != null) {
                 service.play(pendingQueue, pendingIndex);
                 pendingQueue = null;
@@ -134,6 +150,9 @@ public class MusicActivity extends android.app.Activity implements Host {
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
+            if (service != null) {
+                service.removeListener(playbackListener);
+            }
             service = null;
             bound = false;
         }
@@ -192,9 +211,34 @@ public class MusicActivity extends android.app.Activity implements Host {
 
     @Override
     protected void onDestroy() {
+        destroyed = true;
         main.removeCallbacks(ticker);
+        if (activeDownloadSignal != null) {
+            activeDownloadSignal.cancel();
+        }
+        if (activeDownloadTask != null) {
+            activeDownloadTask.cancel(true);
+        }
+        if (service != null) {
+            service.removeListener(playbackListener);
+        }
         if (playerSheet != null) {
             playerSheet.release();
+        }
+        if (collectionSheet != null) {
+            collectionSheet.release();
+        }
+        if (homeScreen != null) {
+            homeScreen.release();
+        }
+        if (searchScreen != null) {
+            searchScreen.release();
+        }
+        if (libraryScreen != null) {
+            libraryScreen.release();
+        }
+        if (settingsScreen != null) {
+            settingsScreen.release();
         }
         if (bound) {
             unbindService(connection);
@@ -395,6 +439,11 @@ public class MusicActivity extends android.app.Activity implements Host {
     }
 
     @Override
+    public boolean isAlive() {
+        return !destroyed;
+    }
+
+    @Override
     public PlaybackService service() {
         return service;
     }
@@ -510,6 +559,9 @@ public class MusicActivity extends android.app.Activity implements Host {
                 main.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (!isAlive()) {
+                            return;
+                        }
                         if (found.isEmpty()) {
                             showToast("No quick picks were returned.");
                             return;
@@ -674,7 +726,13 @@ public class MusicActivity extends android.app.Activity implements Host {
 
     @Override
     public void download(final MediaItem item) {
-        if (item == null) {
+        if (item == null || !isAlive()) {
+            return;
+        }
+        if (activeDownloadSignal != null) {
+            showToast(activeDownloadSignal.isCancelled()
+                    ? "The cancelled download is still stopping. Try again in a moment."
+                    : "A download is already running. Cancel it before starting another.");
             return;
         }
         if (item.localUri.length() > 0) {
@@ -689,72 +747,120 @@ public class MusicActivity extends android.app.Activity implements Host {
             showToast("Already downloaded.");
             return;
         }
+
+        final Downloads.CancellationSignal cancellation = new Downloads.CancellationSignal();
+        activeDownloadSignal = cancellation;
         final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100);
         bar.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 8), 0);
-        AlertDialog dialog = new AlertDialog.Builder(this)
+        final AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Downloading")
                 .setMessage(item.title)
                 .setView(bar)
-                .setNegativeButton("Hide", null)
-                .setCancelable(false)
-                .show();
-        final AlertDialog[] holder = new AlertDialog[]{dialog};
-        io.execute(new Runnable() {
+                .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialogInterface, int which) {
+                        cancellation.cancel();
+                        showToast("Cancelling download…");
+                    }
+                })
+                .setCancelable(true)
+                .create();
+        dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
             @Override
-            public void run() {
-                try {
-                    final MediaItem saved = downloads.downloadSync(item,
-                            new Downloads.Callback() {
-                                @Override
-                                public void onProgress(final int percent, final long done,
-                                                       final long total) {
-                                    main.post(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            if (percent >= 0) {
-                                                bar.setProgress(percent);
-                                            } else if (total > 0) {
-                                                bar.setProgress((int) Math.min(99L,
-                                                        done * 100L / total));
-                                            }
-                                        }
-                                    });
-                                }
-                            });
-                    main.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (holder[0] != null && holder[0].isShowing()) {
-                                holder[0].dismiss();
-                            }
-                            showToast("Saved offline: " + saved.title);
-                            refreshCurrentScreen();
-                        }
-                    });
-                } catch (final IOException error) {
-                    main.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (holder[0] != null && holder[0].isShowing()) {
-                                holder[0].dismiss();
-                            }
-                            showToast("Download failed: " + error.getMessage());
-                        }
-                    });
-                } catch (final Exception error) {
-                    main.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (holder[0] != null && holder[0].isShowing()) {
-                                holder[0].dismiss();
-                            }
-                            showToast("Download failed: " + error.getMessage());
-                        }
-                    });
-                }
+            public void onCancel(DialogInterface dialogInterface) {
+                cancellation.cancel();
             }
         });
+        dialog.show();
+
+        try {
+            activeDownloadTask = io.submit(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        final MediaItem saved = downloads.downloadSync(item,
+                                new Downloads.Callback() {
+                                    @Override
+                                    public void onProgress(final int percent, final long done,
+                                                           final long total) {
+                                        if (!isAlive() || cancellation.isCancelled()) {
+                                            return;
+                                        }
+                                        main.post(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                if (!isAlive() || cancellation.isCancelled()
+                                                        || !dialog.isShowing()) {
+                                                    return;
+                                                }
+                                                if (percent >= 0) {
+                                                    bar.setProgress(percent);
+                                                } else if (total > 0) {
+                                                    bar.setProgress((int) Math.min(99L,
+                                                            done * 100L / total));
+                                                }
+                                            }
+                                        });
+                                    }
+                                }, cancellation);
+                        main.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAlive()) {
+                                    return;
+                                }
+                                clearDownloadRequest(cancellation);
+                                if (dialog.isShowing()) {
+                                    dialog.dismiss();
+                                }
+                                if (cancellation.isCancelled()) {
+                                    showToast("Download finished as cancellation arrived; kept offline.");
+                                    refreshCurrentScreen();
+                                    return;
+                                }
+                                showToast("Saved offline: " + saved.title);
+                                refreshCurrentScreen();
+                            }
+                        });
+                    } catch (final Exception error) {
+                        final boolean cancelled = cancellation.isCancelled()
+                                || Thread.currentThread().isInterrupted();
+                        main.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!isAlive()) {
+                                    return;
+                                }
+                                clearDownloadRequest(cancellation);
+                                if (dialog.isShowing()) {
+                                    dialog.dismiss();
+                                }
+                                if (cancelled) {
+                                    showToast("Download cancelled.");
+                                } else {
+                                    String message = error.getMessage();
+                                    showToast("Download failed: "
+                                            + (message == null ? "invalid audio or network error" : message));
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+        } catch (RuntimeException rejected) {
+            cancellation.cancel();
+            clearDownloadRequest(cancellation);
+            dialog.dismiss();
+            showToast("A download could not be started.");
+        }
+    }
+
+    private void clearDownloadRequest(Downloads.CancellationSignal signal) {
+        if (activeDownloadSignal == signal) {
+            activeDownloadSignal = null;
+            activeDownloadTask = null;
+        }
     }
 
     @Override
@@ -847,6 +953,9 @@ public class MusicActivity extends android.app.Activity implements Host {
                 main.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (!isAlive()) {
+                            return;
+                        }
                         if (artists.isEmpty()) {
                             showToast("No artist profile was found.");
                         } else {
@@ -868,6 +977,7 @@ public class MusicActivity extends android.app.Activity implements Host {
             @Override
             public void run() {
                 final List<MediaItem> radio = new ArrayList<>();
+                final String[] failure = new String[1];
                 radio.add(item);
                 try {
                     // Provider mix first; a title search is the generic fallback.
@@ -889,12 +999,22 @@ public class MusicActivity extends android.app.Activity implements Host {
                             break;
                         }
                     }
-                } catch (final Exception ignored) {
-                    // A single-track queue is still a valid radio fallback.
+                } catch (Exception error) {
+                    failure[0] = error.getMessage();
                 }
                 main.post(new Runnable() {
                     @Override
                     public void run() {
+                        if (!isAlive()) {
+                            return;
+                        }
+                        if (failure[0] != null) {
+                            showToast("Radio unavailable: " + failure[0]);
+                            return;
+                        }
+                        if (radio.size() == 1) {
+                            showToast("No similar tracks were found; playing only this song.");
+                        }
                         play(radio, 0);
                         if (service != null) {
                             service.setShuffle(true);
@@ -907,13 +1027,15 @@ public class MusicActivity extends android.app.Activity implements Host {
 
     @Override
     public void showToast(final String message) {
-        if (message == null || message.length() == 0) {
+        if (!isAlive() || message == null || message.length() == 0) {
             return;
         }
         main.post(new Runnable() {
             @Override
             public void run() {
-                Toast.makeText(MusicActivity.this, message, Toast.LENGTH_SHORT).show();
+                if (isAlive()) {
+                    Toast.makeText(MusicActivity.this, message, Toast.LENGTH_SHORT).show();
+                }
             }
         });
     }

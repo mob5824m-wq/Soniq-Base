@@ -63,7 +63,9 @@ public final class MiniPlayer extends LinearLayout {
         playIcon = new ImageView(context);
         playIcon.setImageResource(R.drawable.soniq_ic_play);
         playIcon.setColorFilter(Theme.TEXT);
-        int buttonSize = Ui.dp(context, 40);
+        playIcon.setContentDescription("Play");
+        playIcon.setFocusable(true);
+        int buttonSize = Ui.dp(context, 48);
         playIcon.setLayoutParams(new LinearLayout.LayoutParams(buttonSize, buttonSize));
         playIcon.setPadding(Ui.dp(context, 10), Ui.dp(context, 10),
                 Ui.dp(context, 10), Ui.dp(context, 10));
@@ -82,6 +84,8 @@ public final class MiniPlayer extends LinearLayout {
         ImageView next = new ImageView(context);
         next.setImageResource(R.drawable.soniq_ic_next);
         next.setColorFilter(Theme.TEXT_DIM);
+        next.setContentDescription("Next track");
+        next.setFocusable(true);
         next.setLayoutParams(new LinearLayout.LayoutParams(buttonSize, buttonSize));
         next.setPadding(Ui.dp(context, 10), Ui.dp(context, 10),
                 Ui.dp(context, 10), Ui.dp(context, 10));
@@ -115,13 +119,26 @@ public final class MiniPlayer extends LinearLayout {
         }
         setVisibility(VISIBLE);
         title.setText(item.title);
-        artist.setText(item.author.length() > 0 ? item.author : "Soniq Music");
+        String artistName = item.author.length() > 0 ? item.author : "Unknown artist";
+        artist.setText(artistName);
+        String accessibilityState = service.isPlaying() ? "Now playing "
+                : service.isPreparing() && service.isPlaybackRequested() ? "Loading "
+                : service.getStatus().length() > 0 ? "Playback status: " + service.getStatus()
+                + ". Track " : "Paused on ";
+        setContentDescription(accessibilityState + item.title + " by " + artistName
+                + ". Open the full player.");
+        art.setContentDescription("Artwork for " + item.title);
         art.load(item.bestThumb());
-        boolean playing = service.isPlaying();
-        playIcon.setImageResource(playing ? R.drawable.soniq_ic_pause : R.drawable.soniq_ic_play);
-        if (service.isPreparing()) {
-            artist.setText(service.getStatus().length() > 0
-                    ? service.getStatus() : "Loading…");
+        boolean playbackRequested = service.isPlaybackRequested();
+        playIcon.setImageResource(playbackRequested
+                ? R.drawable.soniq_ic_pause : R.drawable.soniq_ic_play);
+        playIcon.setContentDescription(service.isPreparing() && playbackRequested
+                ? "Pause loading playback" : playbackRequested ? "Pause" : "Play");
+        String status = service.getStatus();
+        if (status.length() > 0) {
+            artist.setText(status);
+        } else if (service.getOutputWarning().length() > 0) {
+            artist.setText(service.getOutputWarning());
         }
     }
 }

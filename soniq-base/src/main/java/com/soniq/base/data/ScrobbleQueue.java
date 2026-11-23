@@ -2,6 +2,7 @@ package com.soniq.base.data;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 
 import com.soniq.base.SoniqApp;
 import com.soniq.base.model.MediaItem;
@@ -36,6 +37,12 @@ public final class ScrobbleQueue {
     private static final long REQUEST_SPACING_MS = 1100L;
     private static final int MAX_RATE_LIMIT_RETRIES = 3;
 
+    private static final int TRACK_STATUS_NONE = 0;
+    private static final int TRACK_STATUS_QUEUED = 1;
+    private static final int TRACK_STATUS_SUBMITTED = 2;
+    private static final int TRACK_STATUS_MISSING_METADATA = 3;
+    private static final int TRACK_STATUS_DISCARDED = 4;
+
     private static ScrobbleQueue instance;
 
     public static synchronized ScrobbleQueue get(Context context) {
@@ -53,14 +60,25 @@ public final class ScrobbleQueue {
     private final Object lock = new Object();
     private final ArrayList<Scrobble> pending = new ArrayList<>();
     private final AtomicBoolean flushing = new AtomicBoolean(false);
+    private final Object nowPlayingLock = new Object();
+    private volatile boolean flushRequested;
     private volatile String lastError = "";
+    private volatile String nowPlayingError = "";
+    private volatile int currentTrackStatus = TRACK_STATUS_NONE;
+    private volatile String currentTrackError = "";
+    private volatile Scrobble currentListen;
+    private Scrobble pendingNowPlaying;
+    private long pendingNowPlayingGeneration;
+    private long nowPlayingGeneration;
+    private boolean nowPlayingWorkerScheduled;
+    private long lastApiRequestAtMs;
     private ListenBrainzApi api;
 
     // Play-time accounting; only touched on the main thread.
     private String currentKey = "";
     private long playedMs;
     private long startedAtMs;
-    private boolean submitted;
+    private boolean thresholdReached;
 
     private ScrobbleQueue(Context context) {
         this.context = context;
@@ -88,10 +106,27 @@ public final class ScrobbleQueue {
      * track again (re-playing a song from the queue is a new listen).
      */
     public void trackChanged(MediaItem item) {
-        currentKey = item == null ? "" : item.identity();
-        playedMs = 0L;
-        submitted = false;
-        startedAtMs = System.currentTimeMillis();
+        synchronized (nowPlayingLock) {
+            nowPlayingGeneration++;
+            pendingNowPlaying = null;
+        }
+        synchronized (lock) {
+            currentKey = item == null ? "" : item.identity();
+            playedMs = 0L;
+            thresholdReached = false;
+            currentListen = null;
+            currentTrackStatus = TRACK_STATUS_NONE;
+            currentTrackError = "";
+            startedAtMs = System.currentTimeMillis();
+        }
+    }
+
+    /** Drops any playing_now request that has not started yet. */
+    public void playbackPaused() {
+        synchronized (nowPlayingLock) {
+            nowPlayingGeneration++;
+            pendingNowPlaying = null;
+        }
     }
 
     /**
@@ -109,24 +144,107 @@ public final class ScrobbleQueue {
             // First actual start (not a resume): stamp the real playback start time.
             startedAtMs = System.currentTimeMillis();
         }
-        if (!settings.isListenBrainzConfigured() || !settings.announceNowPlaying()
-                || !ScrobblePolicy.isSubmittable(item.author, item.title)) {
-            return;
+        if (settings.isListenBrainzConfigured() && settings.announceNowPlaying()
+                && ScrobblePolicy.isSubmittable(item.author, item.title)) {
+            queuePlayingNow(scrobbleOf(item, nowSec(), durationOf(item, 0L), 0L));
         }
-        final Scrobble listen = scrobbleOf(item, nowSec(), durationOf(item, 0L), 0L);
-        final String token = settings.listenBrainzToken();
-        executor.execute(new Runnable() {
-            @Override
-            public void run() {
+        flush();
+    }
+
+    /** Keeps only the freshest playing_now update and serializes it with all other API calls. */
+    private void queuePlayingNow(Scrobble listen) {
+        boolean schedule = false;
+        synchronized (nowPlayingLock) {
+            pendingNowPlaying = listen;
+            pendingNowPlayingGeneration = ++nowPlayingGeneration;
+            if (!nowPlayingWorkerScheduled) {
+                nowPlayingWorkerScheduled = true;
+                schedule = true;
+            }
+        }
+        if (schedule) {
+            try {
+                executor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        drainPlayingNow();
+                    }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                synchronized (nowPlayingLock) {
+                    nowPlayingWorkerScheduled = false;
+                }
+                nowPlayingError = "ListenBrainz playing-now update could not be scheduled";
+            }
+        }
+    }
+
+    private void drainPlayingNow() {
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                final Scrobble listen;
+                final long requestGeneration;
+                synchronized (nowPlayingLock) {
+                    listen = pendingNowPlaying;
+                    requestGeneration = pendingNowPlayingGeneration;
+                    pendingNowPlaying = null;
+                }
+                if (listen == null) {
+                    return;
+                }
+                if (!settings.isListenBrainzConfigured() || !settings.announceNowPlaying()) {
+                    continue;
+                }
+                if (!awaitApiRequestSlot()) {
+                    return;
+                }
+                synchronized (nowPlayingLock) {
+                    // A track change or pause while rate-limited drops the stale announcement.
+                    if (pendingNowPlaying != null || requestGeneration != nowPlayingGeneration) {
+                        continue;
+                    }
+                }
+                if (!settings.isListenBrainzConfigured() || !settings.announceNowPlaying()) {
+                    continue;
+                }
+                String token = settings.listenBrainzToken();
+                recordApiRequest();
                 try {
                     api().submitPlayingNow(token, listen);
-                    lastError = "";
+                    nowPlayingError = "";
                 } catch (IOException error) {
-                    lastError = describe(error);
+                    nowPlayingError = describe(error);
+                } catch (RuntimeException error) {
+                    nowPlayingError = error.getMessage() == null
+                            ? "ListenBrainz playing-now update failed"
+                            : describe(new IOException(error.getMessage(), error));
                 }
             }
-        });
-        flush();
+        } finally {
+            boolean reschedule = false;
+            synchronized (nowPlayingLock) {
+                nowPlayingWorkerScheduled = false;
+                if (pendingNowPlaying != null && !Thread.currentThread().isInterrupted()) {
+                    nowPlayingWorkerScheduled = true;
+                    reschedule = true;
+                }
+            }
+            if (reschedule) {
+                try {
+                    executor.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            drainPlayingNow();
+                        }
+                    });
+                } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                    synchronized (nowPlayingLock) {
+                        nowPlayingWorkerScheduled = false;
+                    }
+                    nowPlayingError = "ListenBrainz playing-now update could not be scheduled";
+                }
+            }
+        }
     }
 
     /**
@@ -143,27 +261,60 @@ public final class ScrobbleQueue {
         if (!item.identity().equals(currentKey)) {
             trackChanged(item);
         }
-        if (submitted || !settings.isListenBrainzConfigured()) {
+        if (thresholdReached || !settings.isListenBrainzConfigured()) {
             return;
         }
         if (deltaMs <= 0L || deltaMs > ScrobblePolicy.MAX_TICK_MS) {
             return;
         }
         if (!ScrobblePolicy.isSubmittable(item.author, item.title)) {
-            submitted = true;
+            thresholdReached = true;
+            currentTrackStatus = TRACK_STATUS_MISSING_METADATA;
             return;
         }
         playedMs += deltaMs;
-        if (ScrobblePolicy.shouldScrobble(playedMs, durationOf(item, durationMs))) {
-            submitted = true;
-            enqueue(scrobbleOf(item, startedAtMs / 1000L,
-                    durationOf(item, durationMs), playedMs));
+        long duration = durationOf(item, durationMs);
+        if (ScrobblePolicy.shouldScrobble(playedMs, duration)) {
+            thresholdReached = true;
+            Scrobble listen = scrobbleOf(item, startedAtMs / 1000L, duration, playedMs);
+            currentListen = listen;
+            currentTrackStatus = TRACK_STATUS_QUEUED;
+            currentTrackError = "";
+            enqueue(listen);
         }
     }
 
-    /** True once the current track has crossed the listen threshold (for a UI badge). */
+    /** True only after ListenBrainz accepted the current listen, not merely when queued. */
     public boolean isCurrentTrackScrobbled() {
-        return submitted;
+        return currentTrackStatus == TRACK_STATUS_SUBMITTED;
+    }
+
+    /** Honest user-facing status for the current track; an offline listen remains queued. */
+    public String currentTrackStatusMessage() {
+        switch (currentTrackStatus) {
+            case TRACK_STATUS_QUEUED:
+                String error = currentTrackError;
+                if (error.length() > 0) {
+                    return "Listen queued for retry · " + error;
+                }
+                return settings.isListenBrainzConfigured()
+                        ? "Listen queued for ListenBrainz" : "Listen queued · scrobbling is off";
+            case TRACK_STATUS_SUBMITTED:
+                return "Scrobbled to ListenBrainz ✓";
+            case TRACK_STATUS_MISSING_METADATA:
+                return "Not scrobbled · artist or title unavailable";
+            case TRACK_STATUS_DISCARDED:
+                return currentTrackError.length() > 0
+                        ? "Listen discarded · " + currentTrackError
+                        : "Listen removed before submission";
+            default:
+                return "";
+        }
+    }
+
+    /** Last playing_now error, separate from queued listen submission errors. */
+    public String nowPlayingError() {
+        return nowPlayingError;
     }
 
     private Scrobble scrobbleOf(MediaItem item, long listenedAtSec, long durationMs, long playedMs) {
@@ -210,9 +361,14 @@ public final class ScrobbleQueue {
     /** Drops every queued listen (Settings → Pending listens, long-press style safety valve). */
     public void clearPending() {
         synchronized (lock) {
+            if (currentListen != null && pending.contains(currentListen)) {
+                currentTrackStatus = TRACK_STATUS_DISCARDED;
+                currentTrackError = "";
+            }
             pending.clear();
             persistLocked();
         }
+        lastError = "";
     }
 
     private void enqueue(Scrobble listen) {
@@ -222,7 +378,11 @@ public final class ScrobbleQueue {
         synchronized (lock) {
             pending.add(listen);
             while (pending.size() > MAX_PENDING) {
-                pending.remove(0);
+                Scrobble discarded = pending.remove(0);
+                if (discarded == currentListen) {
+                    currentTrackStatus = TRACK_STATUS_DISCARDED;
+                    currentTrackError = "Offline listen queue is full";
+                }
             }
             persistLocked();
         }
@@ -235,24 +395,37 @@ public final class ScrobbleQueue {
             return;
         }
         if (!flushing.compareAndSet(false, true)) {
+            flushRequested = true;
             return;
         }
-        executor.execute(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    drain();
-                } finally {
-                    flushing.set(false);
+        try {
+            executor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        do {
+                            flushRequested = false;
+                            drain();
+                        } while (flushRequested && pendingCount() > 0
+                                && settings.isListenBrainzConfigured()
+                                && !Thread.currentThread().isInterrupted());
+                    } finally {
+                        flushing.set(false);
+                        if (flushRequested && pendingCount() > 0
+                                && settings.isListenBrainzConfigured()) {
+                            flush();
+                        }
+                    }
                 }
-            }
-        });
+            });
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            flushing.set(false);
+        }
     }
 
     private void drain() {
-        String token = settings.listenBrainzToken();
         int rateLimitRetries = 0;
-        while (true) {
+        while (!Thread.currentThread().isInterrupted()) {
             final List<Scrobble> batch;
             final boolean single;
             synchronized (lock) {
@@ -263,6 +436,20 @@ public final class ScrobbleQueue {
                 int count = Math.min(pending.size(), BATCH_SIZE);
                 batch = new ArrayList<>(pending.subList(0, count));
             }
+            if (!settings.isListenBrainzConfigured() || !awaitApiRequestSlot()) {
+                break;
+            }
+            synchronized (lock) {
+                // Do not submit a listen the user cleared while this batch was rate-limited.
+                if (!pending.containsAll(batch)) {
+                    continue;
+                }
+            }
+            if (!settings.isListenBrainzConfigured()) {
+                break;
+            }
+            String token = settings.listenBrainzToken();
+            recordApiRequest();
             try {
                 if (single) {
                     api().submitSingle(token, batch.get(0));
@@ -270,29 +457,70 @@ public final class ScrobbleQueue {
                     api().submitImport(token, batch);
                 }
                 synchronized (lock) {
-                    for (int i = 0; i < batch.size() && !pending.isEmpty(); i++) {
-                        pending.remove(0);
-                    }
+                    pending.removeAll(batch);
                     persistLocked();
+                    lastError = "";
+                    Scrobble tracked = currentListen;
+                    if (tracked != null && batch.contains(tracked)) {
+                        currentTrackError = "";
+                        currentTrackStatus = TRACK_STATUS_SUBMITTED;
+                    }
                 }
-                lastError = "";
                 rateLimitRetries = 0;
             } catch (ListenBrainzApi.HttpFailure failure) {
                 if (failure.code == 429 && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
                     rateLimitRetries++;
-                    sleep(failure.retryAfterSec * 1000L);
+                    if (!sleep(failure.retryAfterSec * 1000L)) {
+                        break;
+                    }
                     continue;
                 }
-                lastError = describe(failure);
+                recordQueueFailure(batch, failure);
                 break;
             } catch (IOException error) {
-                lastError = describe(error);
+                recordQueueFailure(batch, error);
+                break;
+            } catch (RuntimeException error) {
+                recordQueueFailure(batch, new IOException(
+                        "ListenBrainz submission failed", error));
                 break;
             }
-            if (pendingCount() > 0) {
-                sleep(REQUEST_SPACING_MS);
+        }
+    }
+
+    private void recordQueueFailure(List<Scrobble> batch, IOException error) {
+        String message = describe(error);
+        synchronized (lock) {
+            boolean retained = false;
+            for (Scrobble listen : batch) {
+                if (pending.contains(listen)) {
+                    retained = true;
+                    break;
+                }
+            }
+            if (!retained) {
+                return;
+            }
+            lastError = message;
+            Scrobble tracked = currentListen;
+            if (tracked != null && batch.contains(tracked)
+                    && currentTrackStatus == TRACK_STATUS_QUEUED) {
+                currentTrackError = message;
             }
         }
+    }
+
+    private boolean awaitApiRequestSlot() {
+        if (Thread.currentThread().isInterrupted()) {
+            return false;
+        }
+        long elapsed = SystemClock.elapsedRealtime() - lastApiRequestAtMs;
+        long wait = REQUEST_SPACING_MS - elapsed;
+        return sleep(wait) && !Thread.currentThread().isInterrupted();
+    }
+
+    private void recordApiRequest() {
+        lastApiRequestAtMs = SystemClock.elapsedRealtime();
     }
 
     private ListenBrainzApi api() {
@@ -306,14 +534,19 @@ public final class ScrobbleQueue {
         prefs.edit().putString(KEY_PENDING, Scrobble.toJsonArray(pending).toString()).apply();
     }
 
-    private static void sleep(long millis) {
+    private static boolean sleep(long millis) {
+        if (Thread.currentThread().isInterrupted()) {
+            return false;
+        }
         if (millis <= 0L) {
-            return;
+            return true;
         }
         try {
             Thread.sleep(Math.min(millis, 125_000L));
+            return !Thread.currentThread().isInterrupted();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
+            return false;
         }
     }
 
