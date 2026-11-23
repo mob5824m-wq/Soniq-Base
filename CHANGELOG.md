@@ -27,6 +27,9 @@ the YouTube Music client that used to be this whole repository is now the
   while resolving is folded into the playing item (notification, player,
   scrobbles).
 - `examples/youtube-music`: a complete app built on the library.
+- Tag-derived versions (no version numbers in build files) and
+  `scripts/release.py`: a release is `python3 scripts/release.py X.Y.Z --yes`
+  (changelog → commit → tag → push), or a tag created in the GitHub UI.
 - Publishing of `com.soniq.base:soniq-base` to GitHub Packages and GitHub
   Releases with the AAR, sources JAR and example APK, both triggered by
   pushing a `vX.Y.Z` tag.
