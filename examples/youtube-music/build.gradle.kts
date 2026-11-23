@@ -42,6 +42,11 @@ android {
     buildFeatures {
         buildConfig = false
     }
+
+    lint {
+        // Print findings to the console as well, so CI annotations can show them.
+        textReport = true
+    }
 }
 
 dependencies {

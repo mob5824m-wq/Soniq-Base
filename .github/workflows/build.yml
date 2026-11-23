@@ -51,7 +51,7 @@ jobs:
         if: failure()
         run: |
           {
-            grep -hE '^e: |What went wrong|Execution failed|Caused by|error:|FAILURE:' build.log test.log 2>/dev/null || true
+            grep -hE '^e: |What went wrong|Execution failed|Caused by|error:|: Error: |: Fatal: |FAILURE:' build.log test.log 2>/dev/null || true
             grep -h -A12 'What went wrong' build.log test.log 2>/dev/null || true
           } | head -60 | while IFS= read -r line; do echo "::error title=gradle::$line"; done
 
