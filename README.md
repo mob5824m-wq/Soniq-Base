@@ -1,6 +1,6 @@
-# Soniq Base
+# Soniq Base Android
 
-**Soniq Base** is a framework for building Android music apps. It is an Android
+**Soniq Base Android** is a framework for building Android music apps. It is an Android
 library (`:soniq-base`, package `com.soniq.base`) that ships everything a music
 player needs — playback, queue, library, downloads, lyrics, ListenBrainz
 scrobbling and a complete dark UI — behind a small **`MusicProvider`** SPI.
