@@ -228,3 +228,9 @@ Then, for library work:
       changes.
 - [ ] `README.md` / `docs/PORTING.md` updated if the architecture or the
       published surface changed.
+
+
+
+## Music apps
+
+- [ ] `OLD-APP-REQUIRED-FEATURES.md` In music apps all of these features must be implemented
