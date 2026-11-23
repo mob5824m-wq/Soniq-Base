@@ -95,15 +95,29 @@ public final class Ui {
         return image;
     }
 
+    /**
+     * Icon-only action with a minimum 48dp target. New framework UI should use
+     * the overload with a human-readable accessibility description.
+     */
     public static FrameLayout iconButton(Context context, int resource, int tintColor,
                                          int sizeDp, int iconDp, final Runnable onClick) {
+        return iconButton(context, resource, tintColor, sizeDp, iconDp, null, onClick);
+    }
+
+    public static FrameLayout iconButton(Context context, int resource, int tintColor,
+                                         int sizeDp, int iconDp, CharSequence description,
+                                         final Runnable onClick) {
         FrameLayout button = new FrameLayout(context);
-        int size = dp(context, sizeDp);
+        int size = dp(context, Math.max(48, sizeDp));
         button.setLayoutParams(new LinearLayout.LayoutParams(size, size));
-        button.setBackground(ripple(context, 0x00000000, sizeDp / 2f));
+        button.setBackground(ripple(context, 0x00000000, Math.max(24, sizeDp / 2f)));
         button.setClickable(true);
         button.setFocusable(true);
+        if (description != null && description.length() > 0) {
+            button.setContentDescription(description);
+        }
         ImageView image = icon(context, resource, tintColor, iconDp);
+        image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         FrameLayout.LayoutParams imageParams =
                 new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);

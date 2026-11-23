@@ -46,6 +46,16 @@ public final class LyricsView extends ScrollView {
         callback = value;
     }
 
+    /** Shows a visible fetch error instead of incorrectly describing it as no lyrics. */
+    public void setMessage(String message) {
+        lines = new ArrayList<>();
+        active = -1;
+        rows = new TextView[0];
+        list.removeAllViews();
+        empty.setText(message == null ? "Lyrics unavailable." : message);
+        list.addView(empty);
+    }
+
     public void setLyrics(List<LyricLine> value) {
         lines = value == null ? new ArrayList<LyricLine>() : value;
         active = -1;
@@ -60,6 +70,9 @@ public final class LyricsView extends ScrollView {
         for (int i = 0; i < lines.size(); i++) {
             final LyricLine line = lines.get(i);
             TextView row = Ui.text(getContext(), line.text, 14f, Theme.TEXT_DIM, false);
+            row.setContentDescription(line.isTimed()
+                    ? "Seek to " + Theme.formatDuration(line.timeMs) + ": " + line.text
+                    : line.text);
             row.setPadding(Ui.dp(getContext(), 4), Ui.dp(getContext(), 8),
                     Ui.dp(getContext(), 4), Ui.dp(getContext(), 8));
             if (line.isTimed()) {

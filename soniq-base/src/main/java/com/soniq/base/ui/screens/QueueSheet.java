@@ -43,7 +43,7 @@ public final class QueueSheet {
 
         LinearLayout top = Ui.row(host.context());
         top.addView(Ui.iconButton(host.context(), R.drawable.soniq_ic_close,
-                Theme.TEXT, 44, 22, new Runnable() {
+                Theme.TEXT, 44, 22, "Close queue", new Runnable() {
                     @Override
                     public void run() {
                         hide();
@@ -55,7 +55,7 @@ public final class QueueSheet {
         titles.addView(subtitle);
         top.addView(titles, Ui.weight(1f));
         top.addView(Ui.iconButton(host.context(), R.drawable.soniq_ic_close,
-                Theme.TEXT_DIM, 40, 18, new Runnable() {
+                Theme.TEXT_DIM, 48, 18, "Clear playback and queue", new Runnable() {
                     @Override
                     public void run() {
                         if (host.service() != null) {
@@ -139,7 +139,7 @@ public final class QueueSheet {
                     ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
             row.addView(Ui.iconButton(host.context(), R.drawable.soniq_ic_close,
-                    Theme.TEXT_DIM, 36, 16, new Runnable() {
+                    Theme.TEXT_DIM, 48, 16, "Remove " + item.title + " from queue", new Runnable() {
                         @Override
                         public void run() {
                             int index = host.service().queueIndexOf(item);

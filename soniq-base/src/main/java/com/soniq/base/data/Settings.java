@@ -16,6 +16,7 @@ public final class Settings {
     private static final String PREFS = "soniq_settings";
     private static final String KEY_QUALITY = "target_bitrate";
     private static final String KEY_NOTIFICATIONS_ASKED = "notifications_asked";
+    private static final String KEY_EQ_PRESET = "equalizer_preset";
     private static final String KEY_SCROBBLE_ENABLED = "scrobble_enabled";
     private static final String KEY_SCROBBLE_TOKEN = "scrobble_token";
     private static final String KEY_SCROBBLE_USER = "scrobble_user_name";
@@ -42,6 +43,15 @@ public final class Settings {
 
     public void setNotificationsAsked(boolean asked) {
         prefs.edit().putBoolean(KEY_NOTIFICATIONS_ASKED, asked).apply();
+    }
+
+    /** Last selected system equalizer preset index; the effect is attached when playback is ready. */
+    public int equalizerPreset() {
+        return Math.max(0, prefs.getInt(KEY_EQ_PRESET, 0));
+    }
+
+    public void setEqualizerPreset(int preset) {
+        prefs.edit().putInt(KEY_EQ_PRESET, Math.max(0, preset)).apply();
     }
 
     public String qualityLabel() {

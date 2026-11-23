@@ -62,8 +62,10 @@ public final class SettingsScreen extends Screen {
                         chooseSleepTimer();
                     }
                 }));
-        container.addView(settingRow("Equalizer",
-                "System audio effect attached to this player",
+        String equalizerSummary = host.service() == null
+                ? "Selected preset applies when playback is ready"
+                : host.service().equalizerStatus();
+        container.addView(settingRow("Equalizer", equalizerSummary,
                 new Runnable() {
                     @Override
                     public void run() {
@@ -85,9 +87,7 @@ public final class SettingsScreen extends Screen {
                 showTokenDialog();
             }
         }));
-        container.addView(settingRow("Now playing updates", host.settings().announceNowPlaying()
-                        ? "On — tell ListenBrainz when a song starts"
-                        : "Off — only finished listens are submitted",
+        container.addView(settingRow("Now playing updates", nowPlayingSummary(),
                 new Runnable() {
                     @Override
                     public void run() {
@@ -100,14 +100,21 @@ public final class SettingsScreen extends Screen {
             public void run() {
                 ScrobbleQueue queue = ScrobbleQueue.get(host.context());
                 queue.clearLastError();
+                int pending = queue.pendingCount();
                 queue.flush();
-                host.showToast(queue.pendingCount() == 0
-                        ? "Nothing waiting to be submitted"
-                        : "Submitting " + queue.pendingCount() + " listen(s)…");
+                if (pending == 0) {
+                    host.showToast("Nothing waiting to be submitted");
+                } else if (!host.settings().isListenBrainzConfigured()) {
+                    host.showToast(pending + " listen(s) remain queued until scrobbling is enabled.");
+                } else {
+                    host.showToast("Retrying " + pending + " queued listen(s)…");
+                }
                 host.main().postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        refresh();
+                        if (host.isAlive()) {
+                            refresh();
+                        }
                     }
                 }, 1500L);
             }
@@ -227,7 +234,15 @@ public final class SettingsScreen extends Screen {
             host.showToast("Playback service is not ready yet.");
             return;
         }
+        if (!host.service().isEqualizerSupported()) {
+            host.showToast("No usable equalizer effect is available on this device.");
+            return;
+        }
         final String[] presets = host.service().equalizerPresets();
+        if (presets.length == 0) {
+            host.showToast("No equalizer presets are available on this device.");
+            return;
+        }
         int current = host.service().equalizerPreset();
         new AlertDialog.Builder(host.context())
                 .setTitle("Equalizer preset")
@@ -237,6 +252,7 @@ public final class SettingsScreen extends Screen {
                             public void onClick(DialogInterface dialog, int which) {
                                 host.service().setEqualizerPreset(which);
                                 dialog.dismiss();
+                                refresh();
                             }
                         })
                 .setNegativeButton("Cancel", null)
@@ -273,6 +289,20 @@ public final class SettingsScreen extends Screen {
                 : count + (count == 1 ? " listen" : " listens") + " waiting to be submitted";
         String error = queue.lastError();
         return error.length() > 0 ? base + " · " + error : base;
+    }
+
+    private String nowPlayingSummary() {
+        Settings settings = host.settings();
+        if (!settings.announceNowPlaying()) {
+            return "Off — only finished listens are submitted";
+        }
+        if (!settings.isListenBrainzConfigured()) {
+            return "Enabled — updates are sent when ListenBrainz is connected and scrobbling is on";
+        }
+        String error = ScrobbleQueue.get(host.context()).nowPlayingError();
+        return error.length() > 0
+                ? "On — latest update failed: " + error
+                : "On — tell ListenBrainz when a song starts";
     }
 
     private void toggleScrobbling() {
@@ -338,7 +368,7 @@ public final class SettingsScreen extends Screen {
                         }
                         positive.setEnabled(false);
                         positive.setText("Checking…");
-                        host.io().execute(new Runnable() {
+                        runIo(new Runnable() {
                             @Override
                             public void run() {
                                 ListenBrainzApi.TokenResult resultValue = null;
@@ -353,6 +383,9 @@ public final class SettingsScreen extends Screen {
                                 host.main().post(new Runnable() {
                                     @Override
                                     public void run() {
+                                        if (!host.isAlive() || !dialog.isShowing()) {
+                                            return;
+                                        }
                                         positive.setEnabled(true);
                                         positive.setText("Validate & save");
                                         if (result != null && result.valid) {

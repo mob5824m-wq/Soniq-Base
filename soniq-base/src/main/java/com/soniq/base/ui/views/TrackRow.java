@@ -69,8 +69,8 @@ public final class TrackRow extends LinearLayout {
             addView(label);
         }
 
-        addView(Ui.iconButton(context, R.drawable.soniq_ic_more, Theme.TEXT_DIM, 36, 18,
-                new Runnable() {
+        addView(Ui.iconButton(context, R.drawable.soniq_ic_more, Theme.TEXT_DIM, 48, 18,
+                "More actions for " + item.title, new Runnable() {
                     @Override
                     public void run() {
                         if (callback != null) {

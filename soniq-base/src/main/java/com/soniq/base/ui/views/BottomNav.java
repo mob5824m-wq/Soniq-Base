@@ -42,12 +42,15 @@ public final class BottomNav extends LinearLayout {
             item.setBackground(Ui.ripple(context, 0x00000000, 14f));
             item.setClickable(true);
             item.setFocusable(true);
+            item.setMinimumHeight(Ui.dp(context, 48));
+            item.setContentDescription(tab.label);
 
             FrameLayout iconWrap = new FrameLayout(context);
             iconWrap.setLayoutParams(new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             ImageView icon = new ImageView(context);
             icon.setImageResource(tab.icon);
+            icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             int size = Ui.dp(context, 22);
             icon.setLayoutParams(new FrameLayout.LayoutParams(size, size));
             iconWrap.addView(icon);

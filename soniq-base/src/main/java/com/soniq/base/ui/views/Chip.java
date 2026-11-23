@@ -23,7 +23,8 @@ public final class Chip extends TextView {
         setTextColor(Theme.TEXT);
         setPadding(Ui.dp(context, 14), Ui.dp(context, 8), Ui.dp(context, 14), Ui.dp(context, 8));
         setSingleLine(true);
-        int height = Ui.dp(context, 34);
+        int height = Ui.dp(context, 48);
+        setMinimumHeight(height);
         setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, height));
         setSelected(false);

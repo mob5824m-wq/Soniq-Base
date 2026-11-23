@@ -18,6 +18,11 @@ public interface Host {
 
     Context context();
 
+    /** False once the host activity is being destroyed; async UI callbacks must stop then. */
+    default boolean isAlive() {
+        return true;
+    }
+
     PlaybackService service();
 
     Library library();
