@@ -1,5 +1,6 @@
 package com.soniq.base.provider;
 
+import com.soniq.base.model.LyricsState;
 import com.soniq.base.model.MediaItem;
 import com.soniq.base.model.StreamSource;
 
@@ -82,5 +83,22 @@ public interface MusicProvider {
     /** Optional: the ListenBrainz {@code origin_url} for a track, or "" to omit. */
     default String originUrl(MediaItem track) {
         return "";
+    }
+
+    /**
+     * Optional: what this provider knows about a track's lyrics, before any
+     * lookup happens.
+     *
+     * <p>Return {@link LyricsState#INSTRUMENTAL} when the catalogue marks a
+     * track as having no vocals, or {@link LyricsState#EXTERNAL} when lyrics
+     * exist but are only available outside the app. Return
+     * {@link LyricsState#UNKNOWN} (the default) when the provider has no
+     * opinion — the framework then searches lrclib and reports honestly
+     * whether it found nothing or the request failed. Never return
+     * INSTRUMENTAL for a guess: a wrong "instrumental" label is worse than
+     * "no lyrics found".
+     */
+    default String lyricsState(MediaItem track) {
+        return LyricsState.UNKNOWN;
     }
 }

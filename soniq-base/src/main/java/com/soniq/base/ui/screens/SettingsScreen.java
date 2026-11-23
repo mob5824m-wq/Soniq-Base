@@ -73,6 +73,57 @@ public final class SettingsScreen extends Screen {
                     }
                 }));
 
+        container.addView(settingRow("Crossfade", crossfadeSummary(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        chooseCrossfade();
+                    }
+                }));
+        container.addView(settingRow("Gapless playback", gaplessSummary(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        host.settings().setGaplessEnabled(!host.settings().gaplessEnabled());
+                        if (host.service() != null) {
+                            host.service().applyEngineSettings();
+                        }
+                        refresh();
+                    }
+                }));
+        container.addView(settingRow("Continue listening", resumeSummary(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        host.settings().setResumeEnabled(!host.settings().resumeEnabled());
+                        refresh();
+                    }
+                }));
+
+        container.addView(Ui.sectionHeader(host.context(), "Data"));
+        container.addView(settingRow("Wi-Fi only", wifiOnlySummary(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        host.settings().setWifiOnly(!host.settings().wifiOnly());
+                        refresh();
+                    }
+                }));
+        container.addView(settingRow("Library order", host.settings().librarySortLabel(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        chooseLibrarySort();
+                    }
+                }));
+        container.addView(settingRow("Search history", searchHistorySummary(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        confirmClearSearchHistory();
+                    }
+                }));
+
         container.addView(Ui.sectionHeader(host.context(), "ListenBrainz"));
         container.addView(settingRow("Scrobble to ListenBrainz", scrobbleSummary(),
                 new Runnable() {
@@ -138,6 +189,13 @@ public final class SettingsScreen extends Screen {
                 }));
 
         container.addView(Ui.sectionHeader(host.context(), "Storage"));
+        container.addView(settingRow("Downloaded music", downloadsSummary(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        confirmDeleteDownloads();
+                    }
+                }));
         container.addView(settingRow("Clear artwork cache",
                 "Removes decoded cover art from memory; playback is not interrupted",
                 new Runnable() {
@@ -173,6 +231,145 @@ public final class SettingsScreen extends Screen {
         return minutes > 0
                 ? ("Pause playback after " + minutes + " minutes")
                 : "Pause playback after a delay · off";
+    }
+
+    private String crossfadeSummary() {
+        int seconds = host.settings().crossfadeSeconds();
+        return seconds <= 0
+                ? "Off · tracks change with a short gap"
+                : "Fade the last " + seconds + " s into the next track";
+    }
+
+    private String gaplessSummary() {
+        return host.settings().gaplessEnabled()
+                ? "On · the next track is prepared ahead for a seamless change"
+                : "Off · saves memory and one decoder";
+    }
+
+    private String resumeSummary() {
+        return host.settings().resumeEnabled()
+                ? "Home offers the exact track and position you left"
+                : "Off · Home opens without a resume card";
+    }
+
+    private String wifiOnlySummary() {
+        boolean wifiOnly = host.settings().wifiOnly();
+        String network = com.soniq.base.playback.NetworkStatus.label(host.context());
+        return wifiOnly
+                ? "On · streaming and downloads wait for Wi-Fi · now " + network
+                : "Off · streams and downloads on any connection · now " + network;
+    }
+
+    private String searchHistorySummary() {
+        int count = new com.soniq.base.data.SearchHistory(host.context()).size();
+        return count == 0 ? "No searches saved" : count + " saved · tap to clear";
+    }
+
+    private String downloadsSummary() {
+        String size = host.downloads().totalLabel();
+        int count = host.downloads().all().size();
+        if (count == 0) {
+            return "No downloads · nothing taking up space";
+        }
+        return count + (count == 1 ? " song · " : " songs · ")
+                + (size.length() > 0 ? size : "unknown size");
+    }
+
+    private void chooseCrossfade() {
+        final int[] values = {0, 2, 4, 6, 8, 12};
+        String[] labels = {"Off", "2 seconds", "4 seconds", "6 seconds",
+                "8 seconds", "12 seconds"};
+        int current = 0;
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == host.settings().crossfadeSeconds()) {
+                current = i;
+            }
+        }
+        new AlertDialog.Builder(host.context())
+                .setTitle("Crossfade")
+                .setSingleChoiceItems(labels, current, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        host.settings().setCrossfadeSeconds(values[which]);
+                        if (host.service() != null) {
+                            host.service().applyEngineSettings();
+                        }
+                        dialog.dismiss();
+                        refresh();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void chooseLibrarySort() {
+        final int[] values = {Settings.SORT_RECENT, Settings.SORT_TITLE,
+                Settings.SORT_ARTIST, Settings.SORT_DURATION};
+        int current = host.settings().librarySort();
+        new AlertDialog.Builder(host.context())
+                .setTitle("Library order")
+                .setSingleChoiceItems(new String[]{
+                                com.soniq.base.data.LibrarySort.describe(values[0]),
+                                com.soniq.base.data.LibrarySort.describe(values[1]),
+                                com.soniq.base.data.LibrarySort.describe(values[2]),
+                                com.soniq.base.data.LibrarySort.describe(values[3])},
+                        current, new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                host.settings().setLibrarySort(values[which]);
+                                dialog.dismiss();
+                                host.refreshCurrentScreen();
+                                refresh();
+                            }
+                        })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void confirmClearSearchHistory() {
+        final com.soniq.base.data.SearchHistory history =
+                new com.soniq.base.data.SearchHistory(host.context());
+        if (history.size() == 0) {
+            host.showToast("There is no search history to clear.");
+            return;
+        }
+        new AlertDialog.Builder(host.context())
+                .setTitle("Clear search history?")
+                .setMessage("The queries saved on this device are removed. "
+                        + "Your music and account are not affected.")
+                .setPositiveButton("Clear", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        history.clear();
+                        host.showToast("Search history cleared");
+                        refresh();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void confirmDeleteDownloads() {
+        final int count = host.downloads().all().size();
+        if (count == 0) {
+            host.showToast("There are no downloads to remove.");
+            return;
+        }
+        new AlertDialog.Builder(host.context())
+                .setTitle("Remove " + count + " download" + (count == 1 ? "" : "s") + "?")
+                .setMessage("Frees " + downloadsSummary() + ". You can download them again "
+                        + "while online.")
+                .setPositiveButton("Remove", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        int removed = host.downloads().deleteAll();
+                        host.showToast(removed + " download" + (removed == 1 ? "" : "s")
+                                + " removed");
+                        refresh();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private LinearLayout settingRow(String title, String subtitle, final Runnable onClick) {

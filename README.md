@@ -43,7 +43,24 @@ The framework-wide carry-forward requirements distilled from the legacy app are 
   month-by-month chart, top artists / songs / albums / genres with artwork, the
   most played era, and a shareable summary. Years still in progress are marked
   as partial; nothing about it is December-only.
+- **Now-playing widget**: a default home-screen widget (artwork, title, artist,
+  play/pause, next) that the playback service keeps in sync; brand it or ship
+  your own — see [`docs/WIDGETS.md`](docs/WIDGETS.md).
+- **Android Auto browse endpoint**: `SoniqMediaBrowserService` exposes liked
+  songs, recent plays, downloads and playlists to a car head unit.
+- **Crossfade and gapless**: 2–12 s linear crossfade and a prepared-next
+  gapless hand-off, both off by default, both truthful in the media session.
+- **Resume where you left off**: the queue and position persist, and Home offers
+  "Continue listening" only when that position is worth going back to.
+- **Search history**: recent queries as chips, removable one by one or cleared.
+- **Wi-Fi only**: one switch that gates streaming *and* downloads and says why
+  it blocked.
+- **Honest lyrics**: instrumental, not found and unavailable are three different
+  answers, with `MusicProvider.lyricsState()` able to settle it.
+- **Accessibility**: labelled controls, one focus stop per row and 48 dp touch
+  targets throughout, with `ui/A11y` helpers for app screens.
 - **Settings**: stream quality target, sleep timer, equalizer presets,
+  crossfade, gapless, Wi-Fi only, library order, search history, storage,
   notifications, ListenBrainz token, About.
 - **Theming**: one call to rebrand the accent and secondary colours.
 - **Deep links**: a single hook on the activity for your own URL scheme.
@@ -241,12 +258,17 @@ soniq-base/                        the framework (Android library, com.soniq.bas
     provider/MusicProvider.java    the SPI an app implements
     model/MediaItem.java           track / artist / album / playlist model + JSON
     model/StreamSource.java        resolved stream: url, headers, mime, corrected meta
-    data/                          Library, Settings, Downloads, LyricsApi/Parser,
-                                   ImageLoader, ListenBrainzApi, ScrobbleQueue,
-                                   ScrobblePolicy, Scrobble, ListeningRecap/Api
+    data/                          Library, Settings, Downloads, LyricsApi/Parser/
+                                   Repository, ImageLoader, ListenBrainzApi,
+                                   ScrobbleQueue, ScrobblePolicy, Scrobble,
+                                   ListeningRecap/Api, SearchHistory, NetworkPolicy,
+                                   LibrarySort
     playback/                      PlaybackService, PlaybackQueue, PlaybackPosition,
-                                   MediaButtonReceiver
-    ui/                            MusicActivity, Host, Theme, Ui, views/, screens/
+                                   PlaybackEngine (crossfade/gapless), PlaybackSession,
+                                   ResumePoint, SoniqWidgetProvider,
+                                   SoniqMediaBrowserService, MediaButtonReceiver
+    ui/                            MusicActivity, Host, Theme, Ui, A11y, AdaptiveUi,
+                                   views/, screens/
   src/main/res/                    strings (soniq_ prefix), colours, Theme.SoniqBase
   src/test/                        JVM unit tests
 examples/youtube-music/            reference app (com.soniq.example.youtubemusic)

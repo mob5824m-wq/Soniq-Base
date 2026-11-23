@@ -40,6 +40,14 @@ public final class MediaItem {
     /** Content URI of an offline copy; when set the track plays without the provider. */
     public String localUri = "";
 
+    /**
+     * Lyrics availability as reported by the provider, or
+     * {@link LyricsState#UNKNOWN} when the provider has no opinion. A provider
+     * that knows a track is an instrumental sets this so the UI can say
+     * "instrumental" instead of pretending the lookup failed.
+     */
+    public String lyricsState = LyricsState.UNKNOWN;
+
     /** Sets the duration in seconds and refreshes {@link #durationText}. */
     public void setDurationSec(long seconds) {
         durationSec = Math.max(0L, seconds);
@@ -150,6 +158,7 @@ public final class MediaItem {
         out.thumbnailUrl = thumbnailUrl;
         out.isLive = isLive;
         out.localUri = localUri;
+        out.lyricsState = lyricsState;
         return out;
     }
 
@@ -166,6 +175,9 @@ public final class MediaItem {
             o.put("th", thumbnailUrl);
             o.put("live", isLive);
             o.put("local", localUri);
+            if (lyricsState != null && !LyricsState.UNKNOWN.equals(lyricsState)) {
+                o.put("lyr", lyricsState);
+            }
         } catch (Exception ignored) {
         }
         return o;
@@ -186,6 +198,7 @@ public final class MediaItem {
         m.thumbnailUrl = o.optString("th", "");
         m.isLive = o.optBoolean("live", false);
         m.localUri = o.optString("local", "");
+        m.lyricsState = LyricsState.normalize(o.optString("lyr", LyricsState.UNKNOWN));
         return m;
     }
 

@@ -212,6 +212,37 @@ Then, for library work:
    Android-only tests that require `org.json` on the JVM (the android.jar
    stubs throw).
 
+## Backbone vs app: what agents must finish
+
+Several capabilities are **half** the feature on purpose. The framework provides
+the generic half and must not pretend to know your provider, your brand or your
+catalogue. When you add or port one of these, finish the app half or do not
+claim the feature.
+
+Full checklists, with code pointers, live in **[`docs/WIDGETS.md`](docs/WIDGETS.md)**.
+The short version:
+
+| Capability | Already done by the framework | **You (the app) must still do** |
+|---|---|---|
+| **Home-screen widget** | `SoniqWidgetProvider` + `soniq_widget.xml` + push from `PlaybackService` | Brand it (or ship your own provider/layout), declare extra sizes and controls, decide the deep link, keep `Settings.setWidgetEnabled(false)` if you replace it |
+| **Android Auto / MediaBrowserService** | `SoniqMediaBrowserService` with Liked / Recent / Downloads / Playlists and the live session token | Declare the service + `automotiveApp` metadata in *your* manifest, subclass to add catalogue nodes (`providerChildren()` / `browseProviderNode()`), pass the Android Auto QA checklist and test on a DHU |
+| **Crossfade / gapless** | `PlaybackEngine` (pure, tested), next-track prebuffer, dual-player hand-off, truthful `PlaybackState` | Only advertise it if you keep it on, test against your real resolver speed and low-RAM devices, replace the linear fade if you need equal-power |
+| **Search history** | `SearchHistory`, chips with per-entry removal, confirmed clear | Scope it per profile/provider if you have those, merge (not replace) an app-provided suggestions endpoint, never record queries the user did not run |
+| **Wi-Fi only** | `NetworkPolicy` (pure, tested), enforced for streams *and* downloads, Settings row with the live connection | Supply a better connection reading if you can, add roaming/per-account rules, surface `blockedReason` in your download UI |
+| **No lyrics vs instrumental** | `LyricsRepository` four states + cache, distinct UI copy, plain-lyrics labelling | Implement `MusicProvider.lyricsState()` — and never guess "instrumental" from a title |
+| **Resume where you left off** | `PlaybackSession` + `ResumePoint` (pure, tested), Home card, queue restore | Keep `MediaItem.identity()` stable across sessions, re-resolve expiring streams instead of persisting URLs, decide deep-link precedence, never resume a live stream |
+| **Accessibility** | `ui/A11y`, labelled icon buttons, one focus stop per row, 48 dp targets, described artwork | Do the same pass on every custom screen/dialog, translate strings, verify contrast after rebranding, run a TalkBack sweep before release |
+
+Rules that keep this honest:
+
+- Put the generic logic in `soniq-base/` (pure, tested); put anything that knows
+  a provider, a brand, a catalogue shape or a product policy in the app.
+- A feature that is "half done" is **documented as half done** — add or update
+  its row here and in `docs/WIDGETS.md` in the same PR.
+- If the app half is missing, the UI must say so plainly (for example
+  "Lyrics unavailable" or "Wi-Fi only is on · now using Mobile data"), never
+  silently do nothing.
+
 ## PR checklist
 
 - [ ] `./gradlew :soniq-base:assembleDebug :examples:youtube-music:assembleDebug`
@@ -231,9 +262,15 @@ Then, for library work:
       changes.
 - [ ] `README.md` / `docs/PORTING.md` updated if the architecture or the
       published surface changed.
+- [ ] If the change is a "backbone" capability, `docs/WIDGETS.md` and the table
+      above say what the app must still finish.
 
 
 
 ## Music apps
 
 - [ ] `REQUIRED-FEATURES.md` In music apps all of these features must be implemented
+- [ ] `docs/WIDGETS.md` — finish the app half of every backbone capability
+      (widget branding, Android Auto manifest + browse nodes, provider lyrics
+      state, and so on) before claiming the feature in release notes.")
+

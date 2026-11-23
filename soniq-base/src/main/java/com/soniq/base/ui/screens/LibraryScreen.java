@@ -49,8 +49,13 @@ public final class LibraryScreen extends Screen {
         container.addView(Ui.text(host.context(),
                 "Local only · no account · no sync", 12f, Theme.TEXT_DIM, false));
 
-        List<MediaItem> liked = host.library().list(Library.LIKED);
+        List<MediaItem> liked = com.soniq.base.data.LibrarySort.apply(
+                host.library().list(Library.LIKED), host.settings().librarySort());
         container.addView(Ui.sectionHeader(host.context(), "Liked songs · " + liked.size()));
+        container.addView(Ui.caption(host.context(),
+                "Sorted by " + host.settings().librarySortLabel().toLowerCase(
+                        java.util.Locale.ROOT)
+                        + " · change this in Settings"));
         if (liked.isEmpty()) {
             container.addView(Ui.caption(host.context(),
                     "Tap the heart on a song to save it here."));
@@ -175,6 +180,8 @@ public final class LibraryScreen extends Screen {
                     "Long-press a song anywhere and choose this playlist."));
             return;
         }
+        playlistTracks = com.soniq.base.data.LibrarySort.apply(playlistTracks,
+                host.settings().librarySort());
         for (int i = 0; i < playlistTracks.size(); i++) {
             final int index = i;
             final MediaItem item = playlistTracks.get(i);

@@ -180,6 +180,11 @@ public final class Downloads {
         if (existing != null) {
             return existing;
         }
+        if (networkBlocked()) {
+            throw new IOException(new NetworkPolicy(true)
+                    .blockedReason(com.soniq.base.playback.NetworkStatus.currentType(context), true)
+                    + ". Downloads resume when Wi-Fi is available.");
+        }
         StreamSource track = provider.resolve(item);
         checkCancelled(cancellation);
         if (track == null || !track.hasStream()) {
@@ -253,6 +258,87 @@ public final class Downloads {
                 partial.deleteOnExit();
             }
         }
+    }
+
+    /** True when "Wi-Fi only" is on and the current connection is metered. */
+    private boolean networkBlocked() {
+        try {
+            return new com.soniq.base.data.Settings(context).wifiOnly()
+                    && !new NetworkPolicy(true).allowsDownload(
+                    com.soniq.base.playback.NetworkStatus.currentType(context));
+        } catch (RuntimeException unavailable) {
+            // Never block a download because a preference could not be read.
+            return false;
+        }
+    }
+
+    /** Bytes used by downloaded audio, for the Storage settings row. */
+    public long totalBytes() {
+        long total = 0L;
+        for (MediaItem item : all()) {
+            total += byteCount(item);
+        }
+        return total;
+    }
+
+    /** Size of one downloaded file in bytes, or 0 when it is missing. */
+    public long byteCount(MediaItem item) {
+        if (item == null || item.localUri == null || item.localUri.length() == 0) {
+            return 0L;
+        }
+        try {
+            java.io.InputStream input = context.getContentResolver()
+                    .openInputStream(android.net.Uri.parse(item.localUri));
+            if (input == null) {
+                return 0L;
+            }
+            try {
+                long size = 0L;
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = input.read(buffer)) > 0) {
+                    size += read;
+                }
+                return size;
+            } finally {
+                input.close();
+            }
+        } catch (Exception missing) {
+            return 0L;
+        }
+    }
+
+    /** Human total for Settings: "1.2 GB". */
+    public String totalLabel() {
+        return formatBytes(totalBytes());
+    }
+
+    /** Compact byte size; "" for zero so the UI can say "no downloads". */
+    public static String formatBytes(long bytes) {
+        if (bytes <= 0L) {
+            return "";
+        }
+        String[] units = {"B", "KB", "MB", "GB"};
+        double value = bytes;
+        int unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+        return unit == 0
+                ? ((long) value) + " " + units[unit]
+                : String.format(java.util.Locale.US, "%.1f %s", value, units[unit]);
+    }
+
+    /** Deletes every downloaded file; returns how many were removed. */
+    public int deleteAll() {
+        int removed = 0;
+        for (MediaItem item : all()) {
+            if (delete(item)) {
+                removed++;
+            }
+        }
+        return removed;
     }
 
     public boolean delete(MediaItem item) {
