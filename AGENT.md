@@ -233,4 +233,4 @@ Then, for library work:
 
 ## Music apps
 
-- [ ] `OLD-APP-REQUIRED-FEATURES.md` In music apps all of these features must be implemented
+- [ ] `REQUIRED-FEATURES.md` In music apps all of these features must be implemented
