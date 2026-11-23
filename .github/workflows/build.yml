@@ -17,7 +17,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          # Install exactly what the build needs instead of relying on the
+          # runner image's preinstalled SDK.
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -55,7 +59,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          # Install exactly what the build needs instead of relying on the
+          # runner image's preinstalled SDK.
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
 
       - uses: gradle/actions/setup-gradle@v4
 
