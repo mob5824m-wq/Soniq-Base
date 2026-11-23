@@ -1,0 +1,22 @@
+# Legacy-app features required in every Soniq music app
+
+This is the framework-wide carry-forward list distilled from the Kobo Arc 7 Freedom release notes in [`releases/SUITE-FEATURES.md`](https://github.com/mob5824m-wq/Kobo-Arc-7-freedom/blob/main/releases/SUITE-FEATURES.md). It excludes support for old Android versions and device-specific suite, updater, ROM, and system-maintenance features. Provider-specific implementations (for example, YouTube Music catalogue access) belong in the app/provider, not as hard-coded framework behavior.
+
+## Required shared capabilities
+
+1. **Reliable playback and truthful state** — play/pause, seek, queue advancement, and clear loading/buffering/error states. Do not report Playing until the actual player has prepared and started successfully; handle stream/decoder failures explicitly.
+2. **System media integration** — foreground playback service, media session, lock-screen and headset/Bluetooth controls, media notification, audio focus (pause/duck appropriately), wake/Wi-Fi locks as needed, and pause on unplug. Notifications and now-playing metadata must describe the actual active player.
+3. **Queue controls** — up-next visibility and editing, per-item removal, shuffle, and repeat off/all/one, preserving the currently playing item when shuffling.
+4. **Full player and useful navigation** — artwork, title/artist/album, progress and seek controls, and accessible actions for like/save, download, queue, and radio where supported. Search controls must retain usable input space and have clear submission/actions.
+5. **Local library and playlists** — persist liked tracks and saved collections on-device; allow creating, adding to, playing, and removing local playlists/collections. Preserve stable item identity and playlist order across restarts. Provider sign-in or cloud sync must not be implied when data is local.
+6. **Offline downloads** — show progress and allow cancellation; validate the completed media, avoid overwriting existing files, clean up incomplete files, and retain completed downloads. Index downloaded tracks so they remain playable without network/provider access.
+7. **Lyrics** — show lyrics when available, support synchronized lines and seek-to-line, with plain-text fallback; key results to track identity and avoid displaying stale responses after track changes.
+8. **Sleep timer and equalizer** — provide playback settings for a sleep timer and equalizer/presets where device capabilities allow. Do not imply unsupported audio effects are active.
+9. **Audio-volume behavior** — use the media stream for playback volume, respond properly to focus loss, and make muted/zero-volume or unavailable-audio conditions understandable rather than silently claiming audible playback.
+10. **Optional, honest scrobbling** — provide opt-in ListenBrainz scrobbling with the documented listen threshold, rate limiting, and durable retry queue for offline listens. Send provider-supplied service/origin metadata; do not claim a listen was submitted when it is only queued or failed.
+11. **Consistent, rebrandable presentation** — shared UI components and theming that each app can brand without changing framework behavior; usable touch targets and layouts at narrow widths.
+12. **Request/lifecycle safety** — asynchronous search, playback resolution, lyrics, and downloads must be tied to their request and lifecycle. Cancellation, track changes, or screen destruction must prevent late results from replacing current state; failures should be visible and never silently substituted with unrelated content.
+
+## Framework boundary
+
+These are shared expectations for music apps built on Soniq Base. Catalogue search/browse, stream resolution, provider-specific collection semantics, and deep-link parsing remain the `MusicProvider`/host app's responsibility. The framework provides generic behavior and must not assume YouTube, a provider account, cloud library sync, DRM bypass, or a particular remote catalogue. See the [framework feature overview](../README.md#what-the-framework-gives-you) and [porting notes](PORTING.md).
