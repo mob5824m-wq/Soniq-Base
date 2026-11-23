@@ -86,7 +86,20 @@ public final class ListenBrainzApi {
     ListenBrainzApi(String version) {
         String safe = version == null || version.trim().length() == 0 ? "dev" : version.trim();
         this.version = safe;
-        this.userAgent = "SoniqMusic/" + safe + " ( " + CONTACT_URL + " )";
+        this.userAgent = userAgentFor(safe);
+    }
+
+    /**
+     * The User-Agent ListenBrainz requires ("Name/version ( contact-url )");
+     * anonymous clients are blocked. Shared with {@link ListeningRecapApi}.
+     */
+    static String userAgentFor(Context context) {
+        return userAgentFor(readVersion(context));
+    }
+
+    private static String userAgentFor(String version) {
+        String safe = version == null || version.trim().length() == 0 ? "dev" : version.trim();
+        return "SoniqMusic/" + safe + " ( " + CONTACT_URL + " )";
     }
 
     public String clientVersion() {
@@ -269,7 +282,8 @@ public final class ListenBrainzApi {
         }
     }
 
-    private static void waitForRequestSlot() throws InterruptedIOException {
+    /** Shared one-call-per-second spacer; also used by {@link ListeningRecapApi}. */
+    static void waitForRequestSlot() throws InterruptedIOException {
         synchronized (REQUEST_SPACING_LOCK) {
             if (Thread.currentThread().isInterrupted()) {
                 throw new InterruptedIOException("ListenBrainz request cancelled");
@@ -313,7 +327,7 @@ public final class ListenBrainzApi {
         }
     }
 
-    private static String summarize(String text) {
+    static String summarize(String text) {
         if (text == null) {
             return "";
         }
@@ -324,7 +338,7 @@ public final class ListenBrainzApi {
         return compact;
     }
 
-    private static byte[] readFully(InputStream input) throws IOException {
+    static byte[] readFully(InputStream input) throws IOException {
         if (input == null) {
             return new byte[0];
         }

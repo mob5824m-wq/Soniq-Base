@@ -143,6 +143,8 @@ soniq-base/src/main/java/com/soniq/base/
     ScrobbleQueue.java      listen detection, playing_now, offline listen queue
     ScrobblePolicy.java     listen threshold + metadata cleaning (pure, unit-tested)
     Scrobble.java           one persisted listen
+    ListeningRecapApi.java  read-only ListenBrainz statistics client (year recap)
+    ListeningRecap.java     year-in-review model: totals, top lists, chart (pure, unit-tested)
     LyricsApi.java          lrclib.net client
     LyricsParser.java       LRC parser (pure JVM, unit-tested)
     ImageLoader.java        bounded in-memory artwork cache
@@ -160,7 +162,8 @@ soniq-base/src/main/java/com/soniq/base/
     NetworkImage.java       artwork view with outline-rounded corners
     Tab.java                bottom navigation destinations
     views/                  TrackRow, Chip, BottomNav, MiniPlayer, LyricsView
-    screens/                Home, Search, Library, Settings, Player, Queue, Collection
+    screens/                Home, Search, Library, Settings, Player, Queue, Collection,
+                            Recap (Wrapped-style "Year in review")
 soniq-base/src/test/java/   JUnit tests for queue, position, lyrics, scrobble policy,
                             model and filename logic
 examples/youtube-music/src/main/java/com/soniq/example/youtubemusic/

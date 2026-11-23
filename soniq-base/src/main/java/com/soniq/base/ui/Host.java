@@ -51,6 +51,9 @@ public interface Host {
 
     void openPlayer();
 
+    /** Opens the year-in-review recap (listening statistics from ListenBrainz). */
+    void openInsights();
+
     void openLibrary();
 
     void openSearch(String query);
@@ -72,6 +75,9 @@ public interface Host {
     void startRadio(MediaItem item);
 
     void showToast(String message);
+
+    /** Hands plain text to the platform share sheet under {@code chooserTitle}. */
+    void shareText(String chooserTitle, String text);
 
     void requestNotificationPermission();
 

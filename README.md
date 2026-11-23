@@ -38,6 +38,11 @@ The framework-wide carry-forward requirements distilled from the legacy app are 
   "half the track or four minutes" listen rule, one request per second, and an
   on-disk queue for listens made offline. The `music_service` and `origin_url`
   of each listen come from your provider.
+- **Year in review** — a Wrapped-style recap of any whole calendar year from
+  your ListenBrainz statistics: total listens and listening time, a
+  month-by-month chart, top artists / songs / albums / genres with artwork, the
+  most played era, and a shareable summary. Years still in progress are marked
+  as partial; nothing about it is December-only.
 - **Settings**: stream quality target, sleep timer, equalizer presets,
   notifications, ListenBrainz token, About.
 - **Theming**: one call to rebrand the accent and secondary colours.
@@ -148,6 +153,10 @@ the player response knows better than the search result did.
 - **App-level settings** — keep your own `SharedPreferences` (the example
   stores its preferred InnerTube client in `"soniq_youtube_settings"`); the
   framework never reads them.
+- **Year in review** — `Settings.setInsightsUserName(name)` points the recap at
+  a public ListenBrainz profile; without it the recap uses the user the
+  scrobbling token belongs to. A custom `Host` implementation calls
+  `openInsights()` to show it and `shareText()` for the share sheet.
 
 ## Build this repository
 
@@ -234,7 +243,7 @@ soniq-base/                        the framework (Android library, com.soniq.bas
     model/StreamSource.java        resolved stream: url, headers, mime, corrected meta
     data/                          Library, Settings, Downloads, LyricsApi/Parser,
                                    ImageLoader, ListenBrainzApi, ScrobbleQueue,
-                                   ScrobblePolicy, Scrobble
+                                   ScrobblePolicy, Scrobble, ListeningRecap/Api
     playback/                      PlaybackService, PlaybackQueue, PlaybackPosition,
                                    MediaButtonReceiver
     ui/                            MusicActivity, Host, Theme, Ui, views/, screens/

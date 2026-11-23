@@ -120,6 +120,23 @@ public final class SettingsScreen extends Screen {
             }
         }));
 
+        container.addView(Ui.sectionHeader(host.context(), "Year in review"));
+        container.addView(settingRow("Open recap",
+                "Monthly chart, top artists, songs, albums and genres for any year",
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        host.openInsights();
+                    }
+                }));
+        container.addView(settingRow("Statistics profile", recapProfileSummary(),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        showRecapProfileDialog();
+                    }
+                }));
+
         container.addView(Ui.sectionHeader(host.context(), "Storage"));
         container.addView(settingRow("Clear artwork cache",
                 "Removes decoded cover art from memory; playback is not interrupted",
@@ -279,6 +296,60 @@ public final class SettingsScreen extends Screen {
         return masked.length() > 0
                 ? masked + " · tap to change"
                 : "Not set · get one at listenbrainz.org/settings";
+    }
+
+    private String recapProfileSummary() {
+        Settings settings = host.settings();
+        String profile = settings.recapUserName();
+        String saved = "Uses your saved ListenBrainz user; no token is needed for statistics";
+        if (settings.insightsUserName().length() > 0) {
+            return profile + " · tap to change or clear the override";
+        }
+        return profile.length() > 0 ? profile + " · " + saved : "Not set · " + saved;
+    }
+
+    private void showRecapProfileDialog() {
+        final Settings settings = host.settings();
+        final EditText input = new EditText(host.context());
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setHint("ListenBrainz user name");
+        input.setSingleLine(true);
+        String existing = settings.recapUserName();
+        if (existing.length() > 0) {
+            input.setText(existing);
+            input.setSelection(existing.length());
+        }
+        input.setPadding(dp(16), dp(12), dp(16), dp(12));
+        new AlertDialog.Builder(host.context())
+                .setTitle("Statistics profile")
+                .setMessage("Year in review reads public ListenBrainz statistics for this "
+                        + "user name. It falls back to the user your scrobbling token belongs to, "
+                        + "and never sends the token.")
+                .setView(input)
+                .setPositiveButton("Save", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        String name = input.getText().toString().trim();
+                        if (name.length() > 0 && (name.length() < 2 || name.length() > 64)) {
+                            host.showToast("Use the ListenBrainz user name, 2–64 characters.");
+                            return;
+                        }
+                        settings.setInsightsUserName(name);
+                        host.showToast(name.length() > 0
+                                ? "Recap will read " + name : "Recap follows your scrobbling user");
+                        refresh();
+                    }
+                })
+                .setNeutralButton("Clear override", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        settings.setInsightsUserName("");
+                        host.showToast("Recap follows your scrobbling user");
+                        refresh();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private String pendingSummary() {

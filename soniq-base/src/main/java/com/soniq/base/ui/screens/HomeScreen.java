@@ -69,6 +69,12 @@ public final class HomeScreen extends Screen {
                 }
             }
         }), chipParams());
+        chipRow.addView(new Chip(host.context(), "Year in review", new Runnable() {
+            @Override
+            public void run() {
+                host.openInsights();
+            }
+        }), chipParams());
         chipRow.addView(new Chip(host.context(), "Library", new Runnable() {
             @Override
             public void run() {

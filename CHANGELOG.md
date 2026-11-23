@@ -7,6 +7,23 @@ All notable changes to Soniq Base are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Year in review** — a Wrapped-style recap of a whole calendar year built from
+  ListenBrainz listening statistics, opened from Home ("Year in review") and
+  Settings. It shows total listens and listening time, artists / tracks / albums
+  heard and new artists discovered, a January–December activity chart, the top
+  artists, songs, albums and genres with counts and Cover Art Archive artwork,
+  the most played era and busiest weekday, and a native share of a text
+  summary. Any year ListenBrainz still publishes can be selected; a year in
+  progress is labelled as partial and past years stay revisitable.
+  `ListeningRecapApi` only reads public statistics (no token is sent) and
+  `ListeningRecap` is pure Java, unit-tested on the JVM. `Settings` gained
+  `insightsUserName()` / `recapUserName()` so the recap can read a public
+  profile other than the scrobbling account, and `Host` gained `openInsights()`
+  and `shareText(chooserTitle, text)` for host apps that implement it.
+- `docs/REQUIRED-FEATURES.md` gained requirement 13: every app ships a
+  whole-year listening recap, not a December-only summary.
+
 ## [0.1.0] - 2026-11-23
 
 First release of Soniq Base as a framework library. Everything a music player

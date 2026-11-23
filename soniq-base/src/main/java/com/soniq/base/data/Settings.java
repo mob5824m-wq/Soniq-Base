@@ -21,6 +21,7 @@ public final class Settings {
     private static final String KEY_SCROBBLE_TOKEN = "scrobble_token";
     private static final String KEY_SCROBBLE_USER = "scrobble_user_name";
     private static final String KEY_SCROBBLE_NOW_PLAYING = "scrobble_announce_now_playing";
+    private static final String KEY_INSIGHTS_USER = "insights_user_name";
 
     private final SharedPreferences prefs;
 
@@ -100,6 +101,27 @@ public final class Settings {
 
     public void setAnnounceNowPlaying(boolean announce) {
         prefs.edit().putBoolean(KEY_SCROBBLE_NOW_PLAYING, announce).apply();
+    }
+
+    /**
+     * ListenBrainz user whose public statistics "Year in review" reads. Falls
+     * back to the scrobbling user name, so a listener normally needs to set
+     * nothing; anyone can point the recap at another public profile.
+     */
+    public String insightsUserName() {
+        String value = prefs.getString(KEY_INSIGHTS_USER, "");
+        return value == null ? "" : value.trim();
+    }
+
+    public void setInsightsUserName(String name) {
+        prefs.edit().putString(KEY_INSIGHTS_USER,
+                name == null ? "" : name.trim()).apply();
+    }
+
+    /** The ListenBrainz user the recap reads: the override, else the scrobbling user. */
+    public String recapUserName() {
+        String override = insightsUserName();
+        return override.length() > 0 ? override : scrobbleUserName();
     }
 
     /** True when scrobbling is switched on and a token is present. */
