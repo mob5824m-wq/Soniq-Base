@@ -20,3 +20,6 @@ Thumbs.db
 
 # Generated verification output
 .check/
+
+# Python
+__pycache__/
