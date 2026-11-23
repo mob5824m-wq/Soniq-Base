@@ -118,9 +118,16 @@ provider instead of being derived from a `videoId` inside the library.
 
 ## Verification status
 
-Both the original port and the framework split were compiled with ECJ 4.30
-against the Android 35 platform jar, and the JVM unit tests (41) were run with
-a stub JUnit runtime, because the sandbox used to author them has no Android
-SDK, Gradle distribution or Maven access. A full Gradle build was **not**
-executed there. CI (`.github/workflows/build.yml`) runs the real build of both
-modules on every pull request; treat its result as authoritative.
+Both the original port and the framework split were first compiled with ECJ
+4.30 against the Android 35 platform jar, with the JVM unit tests run under a
+stub JUnit runtime, because the sandbox used to author them has no Android SDK,
+Gradle distribution or Maven access. That check cannot see resources: it was
+CI's first green build (after the framework split, PR #2) that caught the
+icons being tinted with AppCompat's `?attr/colorControlNormal` instead of the
+framework's `?android:attr/colorControlNormal`.
+
+Before PR #2, CI had never passed in this repository — `android-actions/setup-android@v3`
+failed on every run before Gradle started. The workflow now uses `setup-android@v4`
+with platform 35 / build-tools 35.0.0 installed explicitly, runs the Gradle
+wrapper (`./gradlew`) and builds both modules plus the unit tests on every
+pull request; it is the authoritative verification.
