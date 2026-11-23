@@ -1,6 +1,6 @@
-# Soniq Music
+# Soniq Base
 
-A standalone YouTube Music client for modern Android, rebuilt from the
+**Soniq Music** — a standalone YouTube Music client for modern Android, rebuilt from the
 YouTube Music app in
 [Kobo Arc 7 Freedom](https://github.com/mob5824m-wq/Kobo-Arc-7-freedom).
 
