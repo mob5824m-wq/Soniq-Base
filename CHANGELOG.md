@@ -62,6 +62,21 @@ All notable changes to Soniq Base are documented here. The format follows
 - `docs/REQUIRED-FEATURES.md` gained requirement 13: every app ships a
   whole-year listening recap, not a December-only summary.
 
+### Fixed
+- **Playback position hardening** (reviewed and ported from upstream Kobo Arc 7
+  Freedom commit `eb270d0`): `PlaybackPosition` now treats only a *changed*
+  player reading as authoritative, so a player frozen on one sample — a stuck
+  `0` or a small positive sample such as `23` ms — no longer freezes elapsed
+  time or the seek bar. Rebuffering (`MEDIA_INFO_BUFFERING_START`/`END`) freezes
+  the wall-clock estimate until the audio advances again; a frozen sample can
+  never confirm or undo a seek, and after the seek-grace window only a reading
+  that keeps changing cancels a pending seek; a stale zero cannot confirm a
+  nonzero seek; and repeat-one, gapless and crossfade restarts reset the
+  tracker at zero so stale end-of-track samples cannot pollute the new
+  timeline. `getDuration()` falls back to the track's known duration while the
+  player still reports none, so the seek bar and the position clamp work from
+  the first tick.
+
 ## [0.1.0] - 2026-11-23
 
 First release of Soniq Base as a framework library. Everything a music player
