@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Compile every module's Java sources against android.jar without Gradle.
+"""Compile Java sources against android.jar without running Gradle.
 
-This is the fast sanity check used when the full Android toolchain is not
-available (for example in a sandbox with only a JDK and one platform jar).
-It generates a temporary ``R.java`` stub per module from its ``src/main/res``
-so resource references resolve, then compiles all main (and optionally the
-library's test) sources together.
+This is a fast sanity check for environments where the full Android build
+is unavailable. It generates temporary R.java stubs from each module's
+resources, then compiles the library and discovered app/example modules.
 
 Usage:
     python3 scripts/compile-check.py                       # uses ANDROID_HOME
@@ -27,14 +25,24 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIBRARY_MODULE = ("soniq-base", True)
+# Support a conventional consuming-app module and this repository's sample app.
+APP_MODULES = (("app", False), ("examples/youtube-music", False))
+NAMESPACE_PATTERN = re.compile(r'\bnamespace\s*=\s*["\']([^"\']+)["\']')
 
-# (module dir, namespace, has unit tests). The example app's R must be generated
-# too because it references its own launcher resources in code-free manifest only,
-# but its classes reference the library R.
-MODULES = [
-    ("soniq-base", "com.soniq.base", True),
-    ("examples/youtube-music", "com.soniq.example.youtubemusic", False),
-]
+
+def module_namespace(module_dir):
+    """Read a module's statically declared Android namespace from Gradle."""
+    build_file = os.path.join(module_dir, "build.gradle.kts")
+    if not os.path.isfile(build_file):
+        build_file = os.path.join(module_dir, "build.gradle")
+    if not os.path.isfile(build_file):
+        raise ValueError("Android module has no build.gradle[.kts]: %s" % module_dir)
+    with open(build_file, encoding="utf-8") as handle:
+        match = NAMESPACE_PATTERN.search(handle.read())
+    if not match:
+        raise ValueError("Could not find a literal Android namespace in %s" % build_file)
+    return match.group(1)
 
 
 def find_android_jar(explicit):
@@ -69,7 +77,8 @@ def resource_fields(res_dir):
                 continue
             fields.append((kind, os.path.splitext(name)[0]))
             # Layouts declare view ids with @+id/..., which also generate R.id.
-            text = open(os.path.join(path, name), encoding="utf-8").read()
+            with open(os.path.join(path, name), encoding="utf-8") as handle:
+                text = handle.read()
             for match in re.finditer(r'@\+id/([A-Za-z_][A-Za-z0-9_]*)', text):
                 if match.group(1) not in ids:
                     ids.append(match.group(1))
@@ -77,7 +86,8 @@ def resource_fields(res_dir):
         path = os.path.join(res_dir, "values", name)
         if not os.path.isfile(path):
             continue
-        text = open(path, encoding="utf-8").read()
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
         for match in re.finditer(r'<string name="([^"]+)"', text):
             fields.append(("string", match.group(1)))
         for match in re.finditer(r'<color name="([^"]+)"', text):
@@ -141,16 +151,25 @@ def main():
     stub_dir = tempfile.mkdtemp(prefix="soniq-r-")
 
     sources = []
-    for module, package, has_tests in MODULES:
-        module_dir = os.path.join(ROOT, *module.split("/"))
-        sources.extend(sorted(glob.glob(os.path.join(
-            module_dir, "src", "main", "java", "**", "*.java"), recursive=True)))
-        res_dir = os.path.join(module_dir, "src", "main", "res")
-        if os.path.isdir(res_dir):
-            sources.append(write_r_stub(stub_dir, package, res_dir))
-        if args.tests and has_tests:
+    modules = [LIBRARY_MODULE]
+    modules.extend(module for module in APP_MODULES
+                   if os.path.isdir(os.path.join(ROOT, *module[0].split("/"))))
+    try:
+        for module, has_tests in modules:
+            module_dir = os.path.join(ROOT, *module.split("/"))
+            package = module_namespace(module_dir)
             sources.extend(sorted(glob.glob(os.path.join(
-                module_dir, "src", "test", "java", "**", "*.java"), recursive=True)))
+                module_dir, "src", "main", "java", "**", "*.java"), recursive=True)))
+            res_dir = os.path.join(module_dir, "src", "main", "res")
+            if os.path.isdir(res_dir):
+                sources.append(write_r_stub(stub_dir, package, res_dir))
+            if args.tests and has_tests:
+                sources.extend(sorted(glob.glob(os.path.join(
+                    module_dir, "src", "test", "java", "**", "*.java"), recursive=True)))
+    except ValueError as error:
+        print("ERROR: %s" % error, file=sys.stderr)
+        shutil.rmtree(stub_dir, ignore_errors=True)
+        return 2
 
     javac = shutil.which("javac")
     if javac:
@@ -160,11 +179,13 @@ def main():
         java = args.java or shutil.which("java") or "java"
         if args.java and not os.path.isfile(args.java):
             print("ERROR: --java executable not found: %s" % args.java, file=sys.stderr)
+            shutil.rmtree(stub_dir, ignore_errors=True)
             return 2
         command = [java, "-jar", args.ecj, "-1.8", "-encoding", "UTF-8",
                    "-cp", classpath, "-d", output] + sources
     else:
         print("ERROR: javac not found and --ecj was not provided.", file=sys.stderr)
+        shutil.rmtree(stub_dir, ignore_errors=True)
         return 2
 
     code = run(command)
