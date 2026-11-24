@@ -43,7 +43,7 @@ OkHttp, Gson or Kotlin.
 - **No account, no bypass** (example app). Public InnerTube endpoints only.
   Never add cookies, OAuth, bot-check solving, signature deciphering, or a
   "sign in to continue" workaround. Provider refusals are surfaced to the user
-  as text, not hidden.
+  as text, not hidden. (Unless making a web version)
 - **Zero runtime dependencies.** Do not add AndroidX, Compose, ExoPlayer,
   OkHttp, Gson or Kotlin unless the owner explicitly approves a stack change.
   If a change truly needs a library, open an issue first and record the reason
