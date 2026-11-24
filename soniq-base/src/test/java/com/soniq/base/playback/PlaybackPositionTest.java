@@ -64,8 +64,11 @@ public final class PlaybackPositionTest {
     @Test
     public void bufferingFreezesTheEstimateAndResumeContinuesFromIt() {
         // MEDIA_INFO_BUFFERING_START/END: while the player re-buffers, the
-        // audio is not advancing, so neither must the clock.
-        PlaybackPosition position = playingAtZero();
+        // audio is not advancing, so neither must the clock. Seeded at 23 like
+        // the upstream harness (a player stuck on a 23 ms buffer sample).
+        PlaybackPosition position = new PlaybackPosition();
+        position.anchor(23, 0L);
+        position.setPlaying(true, 0L);
         Assert.assertEquals(2023, position.update(23, 2000L, 0));
         position.setBuffering(true, 2000L);
         Assert.assertEquals(2023, position.update(23, 6000L, 0));
