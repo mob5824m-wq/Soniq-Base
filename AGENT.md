@@ -21,7 +21,8 @@ Both modules have **zero runtime dependencies**: framework `MediaPlayer`,
 `SharedPreferences` / `org.json` only — no AndroidX, Compose, ExoPlayer,
 OkHttp, Gson or Kotlin.
 
-## Non-negotiable product rules
+## Non-negotiable product rules 
+(With exception of agents working in mob5824m-wq/SoundTrail. See bottom of page for instructions)
 
 - **The library is provider-agnostic.** Nothing under `soniq-base/` may
   mention a specific music service in code, strings, resource names or
@@ -273,4 +274,7 @@ Rules that keep this honest:
 - [ ] `docs/WIDGETS.md` — finish the app half of every backbone capability
       (widget branding, Android Auto manifest + browse nodes, provider lyrics
       state, and so on) before claiming the feature in release notes.")
+
+## Soundtrail Agents
+  - You are to ignore most of this repo except how to stream music and listenbrainz scrobing.
 
