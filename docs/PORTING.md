@@ -74,6 +74,7 @@ Upstream `main` is re-checked periodically; the port started from `382daa0`.
 | `8585e14` "track YouTube video preparation and timeline" | `YouTubeActivity` + new `VideoPositionTracker` for the YouTube *video* app's `VideoView` | Not applicable — the video app is not part of this port. Its "ignore stale zeros / seek-pending" ideas were folded into `PlaybackPosition`. |
 | `ef24020` audio home-screen widget rework | Arc7 glass `RemoteViews` widget | Not applicable — the port uses a `MediaStyle` media notification instead. |
 | `chore: update pre-built signed APKs` (several) | Rebuilt release binaries | Not applicable — no binaries are committed here. |
+| `eb270d0` "Fix YT Music seek/elapsed time and disabled alarms firing" | `Arc7AudioService` replaced its zero-only wall-clock fallback with `VideoPositionTracker` semantics (stuck positive samples, buffering freeze, seek confirmation) and guarded the Clock app's alarms | The seek/elapsed half is ported as the library's `playback/PlaybackPosition`: only a *changed* native reading re-anchors (a sample frozen at `0` or at `23` ms is extrapolated past), rebuffering freezes the clock, a frozen sample can never confirm or undo a seek (only a reading that keeps changing cancels one after `SEEK_GRACE_MS`), a stale zero cannot confirm a nonzero seek, and repeat-one / gapless / crossfade restarts reset the tracker at zero. The alarm/clock half is not applicable — this framework has no clock or alarm code. |
 
 ## Behavioural differences
 
