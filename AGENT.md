@@ -275,6 +275,7 @@ Rules that keep this honest:
       (widget branding, Android Auto manifest + browse nodes, provider lyrics
       state, and so on) before claiming the feature in release notes.")
 - [ ]  You must make an `AGENT.md` for your app
+- [ ]  You need a release workflow with apk
 
 ## Soundtrail Agents
   - You are to ignore most of this repo except how to stream music and listenbrainz scrobing.
