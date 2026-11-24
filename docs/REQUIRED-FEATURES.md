@@ -1,3 +1,4 @@
+(Soundtrail Agents refer to AGENT.md for instructions referring to Required Features)
 # Features required in every Soniq music app
 
 This is the framework-wide carry-forward list distilled from the Kobo Arc 7 Freedom release notes in [`releases/SUITE-FEATURES.md`](https://github.com/mob5824m-wq/Kobo-Arc-7-freedom/blob/main/releases/SUITE-FEATURES.md). It excludes support for old Android versions and device-specific suite, updater, ROM, and system-maintenance features. Provider-specific implementations (for example, YouTube Music catalogue access) belong in the app/provider, not as hard-coded framework behavior.
