@@ -1,0 +1,268 @@
+# Release a Soniq-based music app: build the APK and publish a GitHub Release.
+#
+# Three ways to cut a release:
+#   1. Tag (manual):  python3 scripts/release.py 0.2.0 --yes   (or push a v* tag)
+#   2. Auto-bump:     Actions → Release → Run workflow → bump patch/minor/major
+#   3. Auto on main:  push to main with "[release]" in the commit message
+#      (add "[release:minor]" / "[release:major]" for a bigger bump).
+#
+# Every module's version is derived from the vX.Y.Z tag (root build.gradle.kts),
+# so the tag is the whole version bump — there is no version file to edit.
+# The auto-bump paths prepare the CHANGELOG, build and test, and only then commit,
+# tag and create the Release in this one job, because a tag pushed with
+# GITHUB_TOKEN would not trigger a second workflow run. A failed build therefore
+# never publishes a version — there is nothing to clean up or retry.
+#
+# Auto-bump release notes default to the commits since the last release when
+# `## [Unreleased]` is empty, so Run workflow works with no changelog editing.
+# Hand-written `## [Unreleased]` entries always take precedence.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish or retry (e.g. v1.0.0); leave empty to bump"
+        type: string
+        required: false
+      bump:
+        description: "Auto-bump from the latest tag"
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major]
+
+# Avoid racing version/tag creation across simultaneous release runs.
+concurrency:
+  group: soniq-music-app-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # push the release commit + tag, create the GitHub Release
+
+jobs:
+  release:
+    # Tag pushes always release. Manual dispatches always release.
+    # Pushes to main only release when the commit asks for it ([release]),
+    # so ordinary feature commits never cut a version.
+    if: >-
+      github.ref_type == 'tag' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+       (contains(github.event.head_commit.message, '[release]') ||
+        contains(github.event.head_commit.message, '[release:minor]') ||
+        contains(github.event.head_commit.message, '[release:major]')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the module versions are derived from the tag
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Validate tag / auto-bump version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+          DISPATCH_BUMP: ${{ inputs.bump }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag=""
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$DISPATCH_TAG" ]]; then
+            tag="$DISPATCH_TAG"
+          elif [[ "$REF_TYPE" == "tag" ]]; then
+            tag="$REF_NAME"
+          fi
+          if [[ -n "$tag" ]]; then
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error title=Invalid tag::'$tag' is not vX.Y.Z (an optional -suffix is allowed); nothing was published."
+              exit 1
+            fi
+            # Manual retries must build the tagged commit, not the dispatch branch.
+            git rev-parse --verify --quiet "refs/tags/$tag^{commit}" >/dev/null || {
+              echo "::error::Tag '$tag' was not found."
+              exit 1
+            }
+            git checkout --detach "refs/tags/$tag"
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            if [[ "$tag" == v*-* ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+            echo "mode=tag" >> "$GITHUB_OUTPUT"
+          else
+            # Auto-bump: patch by default, minor/major when asked.
+            bump="patch"
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              bump="${DISPATCH_BUMP:-patch}"
+            elif [[ "$HEAD_MESSAGE" == *"[release:minor]"* ]]; then
+              bump="minor"
+            elif [[ "$HEAD_MESSAGE" == *"[release:major]"* ]]; then
+              bump="major"
+            fi
+            echo "auto-bump: $bump"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git fetch --quiet origin main:refs/remotes/origin/main
+            git switch --force-create main origin/main
+            # Writes the CHANGELOG section, commits it and creates the tag
+            # locally, so the build below derives this version from the tag;
+            # nothing reaches origin until "Publish the prepared release"
+            # succeeds after the build and tests pass.
+            # --from-commits turns an empty [Unreleased] into the commit subjects
+            # since the last release, so an unattended bump never fails on a
+            # missing changelog entry — every commit since the last tag is still
+            # accounted for. Outputs: version / tag / prerelease.
+            prepared="$(python3 scripts/release.py --bump "$bump" --from-commits --prepare)"
+            echo "$prepared"
+            for key in version tag prerelease; do
+              value="$(sed -n "s/^${key}=//p" <<< "$prepared" | tail -1)"
+              [[ -n "$value" ]] || {
+                echo "::error title=Prepare failed::release.py did not report '$key'."
+                exit 1
+              }
+              echo "$key=$value" >> "$GITHUB_OUTPUT"
+            done
+            echo "mode=auto-bump" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build app and library, run unit tests
+        run: |
+          set -o pipefail
+          # AGP names the sources task sourceReleaseJar (source + variant + Jar).
+          ./gradlew :soniq-base:assembleRelease :soniq-base:sourceReleaseJar \
+              :app:assembleRelease :soniq-base:testDebugUnitTest \
+              --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Check the derived version matches the tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          derived="$(./gradlew -q :app:properties --no-daemon | awk -F': ' '/^version:/ { print $2 }')"
+          echo "version from build: $derived"
+          if [[ "$derived" != "$VERSION" ]]; then
+            echo "::error title=Version mismatch::Build reports '$derived' for tag v$VERSION."
+            exit 1
+          fi
+
+      - name: Publish the prepared release
+        if: steps.version.outputs.mode == 'auto-bump'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Nothing was pushed before this point: a failing build above leaves
+          # main, the tags and the Releases untouched. This commits the prepared
+          # CHANGELOG section, tags v$VERSION and pushes both.
+          python3 scripts/release.py --publish-prepared --yes "$VERSION"
+
+      - name: Verify and stage APK
+        id: apk
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/release/app-release.apk"
+          test -f "$apk" || { echo "::error::Release APK not found: $apk"; exit 1; }
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          mkdir -p release-assets
+          named="soniq-music-app-${VERSION}-release.apk"
+          cp "$apk" "release-assets/$named"
+          echo "path=release-assets/$named" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK to workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: soniq-music-app-release-${{ steps.version.outputs.version }}
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Release notes
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set +e
+          python3 scripts/release.py "$VERSION" --print-body > body.md
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "generated=false" >> "$GITHUB_OUTPUT" ;;
+            3) echo "generated=true" >> "$GITHUB_OUTPUT"
+               echo "::warning::CHANGELOG.md has no [$VERSION] section; the release will use auto-generated notes." ;;
+            *) exit "$code" ;;
+          esac
+
+      - name: Surface Gradle errors as annotations
+        if: failure()
+        run: |
+          {
+            grep -hE '^e: |What went wrong|Execution failed|Caused by|error:|: Error: |: Fatal: |FAILURE:' build.log 2>/dev/null || true
+            grep -h -A12 'What went wrong' build.log 2>/dev/null || true
+          } | head -60 | while IFS= read -r line; do echo "::error title=gradle::$line"; done
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          GENERATED: ${{ steps.notes.outputs.generated }}
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          # AGP puts the AAR under build/outputs/aar but the sources JAR elsewhere
+          # under build/, so search the whole build directory. Rename the APK to
+          # carry the version so users can tell releases apart at a glance.
+          assets=()
+          while IFS= read -r file; do assets+=("$file"); done < <(
+            find soniq-base/build \( -name '*.aar' -o -name '*sources*.jar' \))
+          assets+=("$APK")
+          echo "assets: ${assets[*]}"
+          if [[ " ${assets[*]} " != *sources* ]]; then
+            echo "::warning::No sources JAR found under soniq-base/build; the GitHub Release will lack it."
+          fi
+          prerelease_flag=(); [[ "$PRERELEASE" == "true" ]] && prerelease_flag=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Release drafted in the GitHub UI (which pushed the tag): add the assets.
+            # Do not replace published APKs: a fresh runner generates a new
+            # debug signing key, so overwriting would change the install identity.
+            existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            for asset in "${assets[@]}"; do
+              if grep -Fxq "$(basename "$asset")" <<< "$existing"; then
+                echo "Keeping existing asset: $(basename "$asset")"
+              else
+                gh release upload "$TAG" "$asset"
+              fi
+            done
+            if [[ -z "$(gh release view "$TAG" --json body -q .body | tr -d '[:space:]')" ]]; then
+              if [[ "$GENERATED" == "true" ]]; then
+                gh release edit "$TAG" --generate-notes
+              else
+                gh release edit "$TAG" --notes-file body.md
+              fi
+            fi
+          else
+            if [[ "$GENERATED" == "true" ]]; then
+              gh release create "$TAG" "${assets[@]}" --verify-tag --title "Soniq Music App $VERSION" \
+                  --generate-notes "${prerelease_flag[@]}"
+            else
+              gh release create "$TAG" "${assets[@]}" --verify-tag --title "Soniq Music App $VERSION" \
+                  --notes-file body.md "${prerelease_flag[@]}"
+            fi
+          fi
+          gh release view "$TAG" --json url -q .url

@@ -1,5 +1,4 @@
 # Build + unit tests for every push to main and every pull request.
-# Releases (v* tags) are handled by release.yml.
 name: Build
 
 on:
@@ -31,13 +30,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
 
       # Always the wrapper: it pins Gradle 8.9, which AGP 8.7.3 requires.
-      # The example's release build (R8) is what Release workflows attach, so
-      # keep it verified on every PR as well.
-      - name: Assemble library and example app
+      # The app's release build (R8) is what users install, so keep it
+      # verified on every PR as well.
+      - name: Assemble library and app
         run: |
           set -o pipefail
-          ./gradlew :soniq-base:assembleDebug :examples:youtube-music:assembleDebug \
-              :examples:youtube-music:assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+          ./gradlew :soniq-base:assembleDebug :app:assembleDebug \
+              :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Test release automation
+        run: python3 -m unittest discover -s scripts/tests -v
 
       - name: Run JVM unit tests
         run: |
@@ -55,11 +57,11 @@ jobs:
             grep -h -A12 'What went wrong' build.log test.log 2>/dev/null || true
           } | head -60 | while IFS= read -r line; do echo "::error title=gradle::$line"; done
 
-      - name: Upload example APK
+      - name: Upload app APK
         uses: actions/upload-artifact@v7
         with:
-          name: soniq-youtube-music-example-debug
-          path: examples/youtube-music/build/outputs/apk/debug/*.apk
+          name: soniq-music-app-debug
+          path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload library AAR
         uses: actions/upload-artifact@v7

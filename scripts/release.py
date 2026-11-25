@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
-"""Cut a Soniq Base release.
+"""Cut a release for a Soniq-based music app.
 
 A release is a ``vX.Y.Z`` tag on ``main`` plus a ``CHANGELOG.md`` section —
 nothing else. Every module's version is derived from that tag (root
 ``build.gradle.kts``), and pushing the tag runs ``.github/workflows/release.yml``,
-which builds and tests both modules, publishes ``com.soniq.base:soniq-base`` to
-GitHub Packages and creates the GitHub Release with the AAR, sources JAR and
-example APK attached.
+which builds and tests both modules and creates the GitHub Release with the
+release APK (and the library AAR + sources JAR) attached.
 
     python3 scripts/release.py 0.2.0                   # validate; show the plan
     python3 scripts/release.py 0.2.0 --yes             # commit changelog on main, tag, push
     python3 scripts/release.py 0.2.0 --pr              # open a "Release 0.2.0" PR instead
     python3 scripts/release.py 0.2.0 --tag-only --yes  # tag main once that PR is merged
     python3 scripts/release.py 0.2.0 --print-body      # GitHub Release body (used by CI)
+    python3 scripts/release.py --bump patch            # auto-bump: next patch version
+    python3 scripts/release.py --bump patch --yes      # auto-bump, commit, tag, push
 
 Options:
+    --bump KIND    auto-compute the version from the latest ``vX.Y.Z`` tag
+                   (``patch`` / ``minor`` / ``major``); the version argument
+                   is then optional. With no tags yet, any bump starts at
+                   ``0.1.0`` (``major`` starts at ``1.0.0``). If there is
+                   exactly one prepared changelog release and no tags, tag it first.
     --notes TEXT   one bullet for the new section; repeatable. Defaults to the
                    entries collected under ``## [Unreleased]``.
+    --from-commits fall back to the subjects of the commits since the last
+                   release tag when ``[Unreleased]`` and ``--notes`` are empty,
+                   so an unattended bump never fails on a missing changelog entry.
+    --prepare      CI entry point: write the new changelog section, commit it and
+                   create the tag *locally* (so ``git describe`` derives the
+                   version during the build), then print ``version=`` / ``tag=`` /
+                   ``prerelease=`` for the workflow. Nothing is pushed.
+    --publish-prepared
+                   CI entry point, run after the build and tests pass: push the
+                   commit and tag created by ``--prepare``.
     --date ISO     release date recorded in the changelog (default: today)
 
 Exit codes: 0 ok; 1 invalid arguments or state; 3 from ``--print-body`` when the
@@ -36,6 +52,7 @@ CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SECTION = re.compile(r"^## \[([^\]]+)\][^\n]*$", re.M)
 LINK_REF = re.compile(r"^\[([^\]]+)\]:\s+(\S+)[^\n]*$", re.M)
+MAX_COMMIT_NOTES = 30
 
 
 def die(message, code=1):
@@ -50,10 +67,17 @@ def git(*args, check=True):
     return result.stdout.strip()
 
 
-def has_tag(tag):
-    if git("tag", "-l", tag):
+def tag_exists(tag, local=True, remote=True):
+    """Whether ``tag`` exists locally and/or on origin."""
+    if local and git("tag", "-l", tag):
         return True
-    return bool(git("ls-remote", "--tags", "origin", "refs/tags/" + tag, check=False))
+    if remote and git("ls-remote", "--tags", "origin", "refs/tags/" + tag, check=False):
+        return True
+    return False
+
+
+def has_tag(tag):
+    return tag_exists(tag)
 
 
 def repo_slug():
@@ -61,6 +85,95 @@ def repo_slug():
     url = git("remote", "get-url", "origin", check=False)
     match = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?$", url)
     return match.group(1) if match else None
+
+
+def latest_version():
+    """Newest ``vX.Y.Z`` tag (without the ``v``), or None when there are none."""
+    tag = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", check=False)
+    if not tag:
+        # describe() only sees tags reachable from HEAD, which a shallow or
+        # partial clone can lack. Fall back to the newest tag by version so a
+        # bump never restarts the version line from scratch.
+        tag = next((t for t in git("tag", "--list", "--sort=-v:refname",
+                                   "--format=%(refname:short)", "v[0-9]*",
+                                   check=False).split() if SEMVER.match(t[1:])), "")
+        if not tag:
+            return None
+    version = tag[1:] if tag.startswith("v") else tag
+    # A pre-release tag (v1.2.3-rc.1) still counts as the latest release line.
+    return version.split("-")[0] if SEMVER.match(version) else None
+
+
+def bumped_version(kind):
+    """Next version for a ``patch`` / ``minor`` / ``major`` bump from the latest tag."""
+    latest = latest_version()
+    if latest is None:
+        # A prepared first release may have been committed without its tag.
+        # Publish that section rather than trying to create an empty new one.
+        if os.path.exists(CHANGELOG):
+            with open(CHANGELOG, encoding="utf-8") as handle:
+                changelog = Changelog(handle.read())
+            versions = changelog.versions()
+            unreleased = changelog.section_body("unreleased") or ""
+            if len(versions) == 1 and SEMVER.fullmatch(versions[0]) and not unreleased.strip():
+                return versions[0]
+        return "1.0.0" if kind == "major" else "0.1.0"
+    major, minor, patch = (int(n) for n in latest.split("."))
+    if kind == "major":
+        return "%d.0.0" % (major + 1)
+    if kind == "minor":
+        return "%d.%d.0" % (major, minor + 1)
+    return "%d.%d.%d" % (major, minor, patch + 1)
+
+
+def version_tuple(version):
+    """Comparable ``(major, minor, patch)`` for a ``X.Y.Z`` string (suffix ignored)."""
+    return tuple(int(n) for n in version.split("-")[0].split(".")[:3])
+
+
+def release_range(version):
+    """Git range holding the commits a ``version`` release ships.
+
+    ``v<previous>..HEAD`` when a release tag exists, else ``HEAD`` — i.e. every
+    commit, which is what a prepared first release publishes.
+    """
+    latest = latest_version()
+    if latest is None or version_tuple(version) <= version_tuple(latest):
+        return ["HEAD"]
+    return ["v%s..HEAD" % latest]
+
+
+def commits_since_release(version):
+    """One-line description of every change a ``version`` release ships.
+
+    Subjects only, with merge commits dropped (the branch commits they bring in
+    are already listed) and release-plumbing commits skipped, oldest first.
+    """
+    log = git("log", "--no-merges", "--reverse", "--pretty=%s", *release_range(version),
+              check=False)
+    # --no-merges already drops merge commits; skip them again for histories
+    # rewritten or squashed in ways git no longer reports as merges, plus the
+    # release plumbing this script and the workflow create.
+    skip = re.compile(
+        r"^(Merge\s+(pull request|branch|remote-tracking)|Release\s+\d+\.\d+\.\d+|"
+        r"Auto-?bump\b|Bump version\b)", re.I)
+    subjects = []
+    for line in log.splitlines():
+        subject = line.strip()
+        if not subject or skip.match(subject) or subject in subjects:
+            continue
+        subjects.append(subject)
+    return subjects
+
+
+def note_bullets(subjects):
+    """Changelog bullets for commit subjects, capped so CI does not write novels."""
+    if len(subjects) > MAX_COMMIT_NOTES:
+        subjects = subjects[:MAX_COMMIT_NOTES] + [
+            "…and %d more change(s); see the commit history." % (
+                len(subjects) - MAX_COMMIT_NOTES)]
+    return [subject if subject[:2] in ("- ", "* ") else "- " + subject[0].upper() + subject[1:]
+            for subject in subjects]
 
 
 class Changelog:
@@ -142,9 +255,7 @@ class Changelog:
 
 
 def release_body(version, body, slug):
-    slug = slug or "mob5824m-wq/Soniq-Base"
-    return "%s\n\n## Using this release\n\n```kotlin\n// settings.gradle.kts\nrepositories {\n    maven {\n        url = uri(\"https://maven.pkg.github.com/%s\")\n        // A GitHub token with read:packages, even for public packages.\n        credentials { username = githubUser; password = githubToken }\n    }\n}\n\n// build.gradle.kts\ndependencies { implementation(\"com.soniq.base:soniq-base:%s\") }\n```\n\nOther ways to depend on the library (composite build, submodule, sources) are\nlisted in the README under \"Depending on the library\".\n\n## Assets\n\n- `soniq-base-release.aar` — the library\n- `soniq-base-*-sources.jar` — library sources\n- `youtube-music-release.apk` — the YouTube Music example app (debug-signed)\n" % (
-        body, slug, version)
+    return "%s\n\n## Install\n\nDownload `soniq-music-app-%s-release.apk` below and\ninstall it on Android 8.0+ (API 26). The APK is debug-signed (this is a\nrevival client, not a store release), so Android may ask you to allow\ninstalls from your browser or file manager.\n\n## Assets\n\n- `soniq-music-app-%s-release.apk` — the app (debug-signed)\n- `soniq-base-release.aar` — the vendored Soniq Base library\n- `soniq-base-*-sources.jar` — library sources\n" % (body, version, version)
 
 
 def require_clean_tree():
@@ -180,12 +291,11 @@ def tag_main(version, tag, slug, apply):
     kind = "pre-release" if "-" in version else "release"
     print("  tag %s  →  %s  (%s)" % (tag, git("rev-parse", "--short", "HEAD"), kind))
     print("  push origin %s" % tag)
-    print("  → Release workflow: build + tests, publish com.soniq.base:soniq-base:%s, "
-          "GitHub Release" % version)
+    print("  → Release workflow: build + tests, GitHub Release with APK")
     if not apply:
         print("\nDry run. Re-run with --yes to tag and push.")
         return
-    git("tag", "-a", tag, "-m", "Soniq Base %s" % version)
+    git("tag", "-a", tag, "-m", "Soniq Music App %s" % version)
     git("push", "origin", tag)
     print("Tagged %s and pushed it; the Release workflow is running." % tag)
     urls(tag, slug)
@@ -202,6 +312,41 @@ def urls(tag, slug):
         return
     print("\n  Actions:  https://github.com/%s/actions/workflows/release.yml" % slug)
     print("  Release:  https://github.com/%s/releases/tag/%s  (once CI finishes)" % (slug, tag))
+
+
+def print_prepare(version, tag):
+    """Print the values the Release workflow reads from ``--prepare``."""
+    print("version=%s" % version)
+    print("tag=%s" % tag)
+    print("prerelease=%s" % ("true" if "-" in version else "false"))
+
+
+def prepublish(version, tag):
+    """Commit the prepared CHANGELOG section and tag it locally — no push.
+
+    The Release workflow runs this before the build so the modules derive
+    ``version`` from the tag (``git describe --exact-match``), then keeps the
+    tag and commit local: nothing is visible on the remote until
+    ``publish_prepared`` succeeds after the build and tests pass.
+    """
+    if not git("status", "--porcelain", check=False):
+        # The section was already committed on main: tag the commit as it is.
+        print("CHANGELOG.md already carried [%s]; tagging the current commit." % version)
+    else:
+        git("add", "CHANGELOG.md")
+        git("commit", "--quiet", "-m", "Release %s" % version)
+    git("tag", "-a", tag, "-m", "Soniq Music App %s" % version)
+    print("Tagged %s locally; publish after the build." % tag)
+
+
+def publish_prepared(version, tag):
+    """Push the commit and tag created by ``prepublish`` — called after the build."""
+    if tag_exists(tag, local=False):
+        die("tag %s is already on origin; nothing to publish (the release is done)."
+            % tag)
+    git("push", "--quiet", "origin", "HEAD:refs/heads/main")
+    git("push", "--quiet", "origin", "refs/tags/%s" % tag)
+    print("Pushed the release commit and %s; publishing the release." % tag)
 
 
 def open_release_pr(version, branch, body):
@@ -222,7 +367,12 @@ def open_release_pr(version, branch, body):
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("version", help="X.Y.Z (an optional -suffix marks a pre-release)")
+    parser.add_argument("version", nargs="?", default=None,
+                        help="X.Y.Z (an optional -suffix marks a pre-release); "
+                             "omit with --bump to auto-compute it")
+    parser.add_argument("--bump", choices=["patch", "minor", "major"], default=None,
+                        metavar="KIND",
+                        help="auto-compute the version from the latest vX.Y.Z tag")
     parser.add_argument("--yes", action="store_true", help="apply the plan (default: show it)")
     parser.add_argument("--pr", action="store_true",
                         help="open a release PR instead of committing to main")
@@ -230,19 +380,42 @@ def main():
                         help="only tag main (after a release PR was merged)")
     parser.add_argument("--print-body", action="store_true",
                         help="print the GitHub Release body and exit (used by CI)")
+    parser.add_argument("--from-commits", action="store_true",
+                        help="use the commits since the last release tag as notes when "
+                             "[Unreleased] and --notes are empty (used by CI)")
+    parser.add_argument("--prepare", action="store_true",
+                        help="write the new changelog section and print version/tag for "
+                             "CI, without committing, tagging or pushing")
+    parser.add_argument("--publish-prepared", action="store_true",
+                        help="commit, tag and push a section written by --prepare (CI, "
+                             "after the build passes)")
     parser.add_argument("--notes", action="append", default=[], metavar="TEXT",
                         help="bullet for the new section; repeatable")
     parser.add_argument("--date", help="release date for the changelog (default: today)")
     args = parser.parse_args()
 
-    version = args.version.strip().lower()
-    if version.startswith("v"):
-        version = version[1:]
-    if not SEMVER.match(version):
-        die("%r is not X.Y.Z (optionally with a -suffix such as -rc.1)" % args.version)
+    if args.bump:
+        if args.version:
+            die("pass either a version or --bump, not both.")
+        git("fetch", "--quiet", "--tags", "origin")
+        version = bumped_version(args.bump)
+        print("Auto-bumped %s version: %s" % (args.bump, version))
+    elif args.version:
+        version = args.version.strip().lower()
+        if version.startswith("v"):
+            version = version[1:]
+        if not SEMVER.match(version):
+            die("%r is not X.Y.Z (optionally with a -suffix such as -rc.1)" % args.version)
+    else:
+        die("pass a version (X.Y.Z) or --bump patch|minor|major.")
     tag = "v" + version
     date = args.date or datetime.date.today().isoformat()
     slug = repo_slug()
+
+    if args.publish_prepared:
+        publish_prepared(version, tag)
+        urls(tag, slug)
+        return
 
     if not os.path.exists(CHANGELOG):
         die("CHANGELOG.md not found next to the repository root.")
@@ -262,7 +435,8 @@ def main():
 
     if has_tag(tag):
         die("tag %s already exists." % tag)
-    require_clean_tree()
+    if not args.prepare:
+        require_clean_tree()
 
     if args.tag_only:
         print("Plan:")
@@ -300,13 +474,13 @@ def main():
         git("commit", "--quiet", "-m", "Release %s" % version)
         git("push", "--quiet", "-u", "origin", branch)
         open_release_pr(version, branch, (
-            "Cuts **Soniq Base %s**: moves the `[Unreleased]` entries of `CHANGELOG.md` "
+            "Cuts **Soniq Music App %s**: moves the `[Unreleased]` entries of `CHANGELOG.md` "
             "into the new version's section and updates the compare links.\n\n"
             "After merging, tag main from a clean checkout:\n\n"
             "    python3 scripts/release.py %s --tag-only --yes\n\n"
-            "Pushing the tag runs the Release workflow: build + tests, publish "
-            "`com.soniq.base:soniq-base:%s` to GitHub Packages, create the GitHub Release."
-            % (version, version, version)))
+            "Pushing the tag runs the Release workflow: build + tests, create the "
+            "GitHub Release with the APK attached."
+            % (version, version)))
         if previous_branch != "HEAD":
             git("switch", "--quiet", previous_branch)
             print("Back on %s." % previous_branch)
@@ -316,13 +490,44 @@ def main():
     if changelog.section_body(version) is not None:
         # The section was added in a feature or release PR: nothing to commit.
         print("CHANGELOG.md already has a [%s] section — nothing to commit.\n" % version)
+        if args.prepare:
+            # CI builds before it publishes; tag the commit that has the section.
+            prepublish(version, tag)
+            print_prepare(version, tag)
+            return
         print("Plan:")
         tag_main(version, tag, slug, args.yes)
         return
     new_text = changelog.release(version, date, args.notes)
+    if new_text is None and args.from_commits:
+        # Unattended bump: an empty [Unreleased] is not an error, the commits
+        # since the last release tag are the notes.
+        subjects = commits_since_release(version)
+        if not subjects and latest_version() is not None:
+            # Nothing landed since the last tag: releasing would ship an empty
+            # version. Fail with the reason instead of a confusing changelog error.
+            die("no commits since v%s, so there is nothing to release in %s. "
+                "Push a change to main first." % (latest_version(), version))
+        notes = note_bullets(subjects)
+        if notes:
+            print("Nothing under [Unreleased]; using %d commit subject(s) as notes.\n"
+                  % len(notes))
+            new_text = changelog.release(version, date, notes)
     if new_text is None:
-        die("nothing under [Unreleased] and no --notes; add changelog entries first.")
+        die("nothing under [Unreleased] and no --notes; add changelog entries to "
+            "[Unreleased] in CHANGELOG.md first, pass --notes \"…\", or pass "
+            "--from-commits to build the notes from the commit history.")
     new_text = changelog.update_links(new_text, version, slug)
+    if args.prepare:
+        # Commit and tag locally only: the Release workflow builds and tests
+        # first and publishes with --publish-prepared once they pass.
+        with open(CHANGELOG, "w", encoding="utf-8") as handle:
+            handle.write(new_text)
+        show_diff(original, new_text)
+        print()
+        prepublish(version, tag)
+        print_prepare(version, tag)
+        return
     if current_branch() != "main":
         die("run this on main (you are on %s); use --pr to open a release pull request "
             "from a branch." % current_branch())
@@ -331,8 +536,7 @@ def main():
         version, ", pushing %d local commit(s) ahead of origin" % ahead if ahead else ""))
     print("  tag %s  →  %s  (%s)" % (tag, version, "pre-release" if "-" in version else "release"))
     print("  push origin main, then origin %s" % tag)
-    print("  → Release workflow: build + tests, publish com.soniq.base:soniq-base:%s, "
-          "GitHub Release\n" % version)
+    print("  → Release workflow: build + tests, GitHub Release with APK\n")
     show_diff(original, new_text)
     if not args.yes:
         print("\nDry run. Re-run with --yes to commit, tag and push.")
@@ -341,7 +545,7 @@ def main():
         handle.write(new_text)
     git("add", "CHANGELOG.md")
     git("commit", "--quiet", "-m", "Release %s" % version)
-    git("tag", "-a", tag, "-m", "Soniq Base %s" % version)
+    git("tag", "-a", tag, "-m", "Soniq Music App %s" % version)
     git("push", "--quiet", "origin", "main")
     git("push", "--quiet", "origin", tag)
     print("Committed, tagged %s and pushed; the Release workflow is running." % tag)
