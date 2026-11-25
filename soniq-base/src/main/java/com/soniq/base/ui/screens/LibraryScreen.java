@@ -291,6 +291,8 @@ public final class LibraryScreen extends Screen {
                         public void onClick(MediaItem clicked, int position) {
                             if (clicked.isArtist()) {
                                 host.openArtist(clicked);
+                            } else if (clicked.isPodcast()) {
+                                host.openCollection(clicked);
                             } else if (clicked.isCollection()) {
                                 if (clicked.isLocalPlaylist()) {
                                     openPlaylist = clicked;
@@ -315,6 +317,8 @@ public final class LibraryScreen extends Screen {
                                 host.library().remove(Library.ARTISTS, clicked);
                                 host.showToast("Removed from saved artists");
                                 refresh();
+                            } else if (clicked.isPodcast()) {
+                                host.showTrackMenu(clicked);
                             }
                         }
 

@@ -40,7 +40,9 @@ OkHttp, Gson or Kotlin.
 - **Modern Android only.** Never reintroduce Android 4 / API 15–17 shims: no
   DEX 035, no `Theme.Holo`, no TLS gateway, no CA bundle overrides, no local
   DASH range proxy, no MP4 remuxer, no legacy AAC/TS probes.
-- **No account, no bypass** (example app). Public InnerTube endpoints only.
+- **No account, no bypass** (example app). Public InnerTube endpoints and
+  public podcast endpoints only (Apple's iTunes Search API, each show's own
+  RSS feed, the enclosure URL for playback).
   Never add cookies, OAuth, bot-check solving, signature deciphering, or a
   "sign in to continue" workaround. Provider refusals are surfaced to the user
   as text, not hidden. (Unless making a web version)
@@ -132,16 +134,21 @@ soniq-base/src/main/java/com/soniq/base/
   SoniqApp.java             Application base: createProvider(), providerOf(Context)
   provider/
     MusicProvider.java      THE SPI: id, displayName, search, browse, resolve +
-                            optional quickPicks, radio, musicService, originUrl
+                            optional quickPicks, radio, podcasts, musicService,
+                            originUrl; FILTER_* search filters
   model/
-    MediaItem.java          track / artist / album / playlist model + JSON
+    MediaItem.java          track / artist / album / playlist / podcast / episode
+                            model + JSON (isPodcast/isEpisode, publish date)
     StreamSource.java       resolved stream: url, headers, mime, hls, corrected meta
   data/
-    Library.java            liked / artists / collections / local playlists / recent
+    Library.java            liked / artists / collections / local playlists / recent /
+                            podcasts (subscriptions)
+    EpisodeProgress.java    per-episode position + played flag (text codec, unit-tested)
     Settings.java           quality, notification-prompt state, ListenBrainz token
     Downloads.java          MediaStore downloads + offline index (Music/<app label>)
     ListenBrainzApi.java    validate-token / submit-listens HTTP client
     ScrobbleQueue.java      listen detection, playing_now, offline listen queue
+                            (episodes never scrobble)
     ScrobblePolicy.java     listen threshold + metadata cleaning (pure, unit-tested)
     Scrobble.java           one persisted listen
     ListeningRecapApi.java  read-only ListenBrainz statistics client (year recap)
@@ -161,12 +168,12 @@ soniq-base/src/main/java/com/soniq/base/
     Host.java               screen ↔ activity contract
     Theme.java / Ui.java    palette (Theme.customize) + programmatic widget helpers
     NetworkImage.java       artwork view with outline-rounded corners
-    Tab.java                bottom navigation destinations
+    Tab.java                bottom navigation destinations (incl. PODCASTS)
     views/                  TrackRow, Chip, BottomNav, MiniPlayer, LyricsView
-    screens/                Home, Search, Library, Settings, Player, Queue, Collection,
-                            Recap (Wrapped-style "Year in review")
+    screens/                Home, Search, Library, Podcasts, Settings, Player, Queue,
+                            Collection, Recap (Wrapped-style "Year in review")
 soniq-base/src/test/java/   JUnit tests for queue, position, lyrics, scrobble policy,
-                            model and filename logic
+                            episode progress, model and filename logic
 examples/youtube-music/src/main/java/com/soniq/example/youtubemusic/
   YouTubeMusicProvider.java MusicProvider implementation — the only class the
                             framework sees (maps filters → search modes, etc.)
@@ -233,6 +240,7 @@ The short version:
 | **No lyrics vs instrumental** | `LyricsRepository` four states + cache, distinct UI copy, plain-lyrics labelling | Implement `MusicProvider.lyricsState()` — and never guess "instrumental" from a title |
 | **Resume where you left off** | `PlaybackSession` + `ResumePoint` (pure, tested), Home card, queue restore | Keep `MediaItem.identity()` stable across sessions, re-resolve expiring streams instead of persisting URLs, decide deep-link precedence, never resume a live stream |
 | **Accessibility** | `ui/A11y`, labelled icon buttons, one focus stop per row, 48 dp targets, described artwork | Do the same pass on every custom screen/dialog, translate strings, verify contrast after rebranding, run a TalkBack sweep before release |
+| **Podcasts** | `KIND_PODCAST`/`KIND_EPISODE` kinds, `FILTER_PODCASTS`, `podcasts()` default, `EpisodeProgress` resume + played, Podcasts tab, ±15s/±30s skip, no scrobbling for episodes | Supply a provider with a real podcast catalogue (`podcasts()`, show/episode search, episode `resolve()`), add Auto/Wear catalogue nodes via `providerChildren()`, decide subscription/download policy |
 
 Rules that keep this honest:
 

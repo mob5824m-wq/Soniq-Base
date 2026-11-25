@@ -108,4 +108,52 @@ public final class MediaItemTest {
         Assert.assertEquals("", song.localUri);
         Assert.assertEquals("abc", copy.id);
     }
+
+    @Test
+    public void podcastShowIsBrowsableNotPlayable() {
+        MediaItem show = new MediaItem();
+        show.kind = MediaItem.KIND_PODCAST;
+        show.id = "show123";
+        show.title = "The Show";
+        show.author = "Network";
+        Assert.assertTrue(show.isPodcast());
+        Assert.assertFalse(show.isEpisode());
+        Assert.assertTrue(show.isBrowsable());
+        Assert.assertFalse(show.isPlayable());
+        Assert.assertEquals("podcast:show123", show.identity());
+        // Browsable subtitle is the kind label, like artists and albums.
+        Assert.assertEquals("PODCAST · Network", show.subtitle());
+    }
+
+    @Test
+    public void episodeIsPlayableWithADatedSubtitle() {
+        MediaItem episode = new MediaItem();
+        episode.kind = MediaItem.KIND_EPISODE;
+        episode.id = "ep42";
+        episode.title = "Episode 42";
+        episode.author = "The Show";
+        episode.date = "Nov 24, 2026";
+        episode.durationText = "45:10";
+        Assert.assertTrue(episode.isEpisode());
+        Assert.assertFalse(episode.isPodcast());
+        Assert.assertFalse(episode.isBrowsable());
+        Assert.assertTrue(episode.isPlayable());
+        Assert.assertEquals("episode:ep42", episode.identity());
+        Assert.assertEquals("The Show  •  Nov 24, 2026  •  45:10", episode.subtitle());
+    }
+
+    @Test
+    public void podcastCopyKeepsDateAndKind() {
+        MediaItem episode = new MediaItem();
+        episode.kind = MediaItem.KIND_EPISODE;
+        episode.id = "ep1";
+        episode.title = "Ep";
+        episode.date = "Jan 1, 2026";
+        MediaItem copy = episode.copy();
+        Assert.assertTrue(copy.isEpisode());
+        Assert.assertEquals("Jan 1, 2026", copy.date);
+        Assert.assertEquals("episode:ep1", copy.identity());
+        copy.date = "Feb 1, 2026";
+        Assert.assertEquals("Jan 1, 2026", episode.date);
+    }
 }

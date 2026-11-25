@@ -56,6 +56,8 @@ public final class PlayerSheet {
     private final ImageView likeIcon;
     private final LyricsView lyricsView;
     private final LinearLayout lyricsPanel;
+    /** ±15s/±30s skip pills; visible only while an episode is loaded. */
+    private final LinearLayout skipRow;
     private final List<LyricLine> lyrics = new ArrayList<>();
     private final ExecutorService lyricsExecutor = Executors.newSingleThreadExecutor();
     private final LyricsRepository lyricsRepository;
@@ -301,6 +303,31 @@ public final class PlayerSheet {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         column.addView(transportScroll, Ui.matchWrap());
 
+        // Podcast-style skip: only meaningful on episodes, so it hides itself.
+        skipRow = Ui.row(host.context());
+        skipRow.setGravity(Gravity.CENTER);
+        skipRow.setPadding(0, Ui.dp(host.context(), 6), 0, 0);
+        skipRow.addView(skipPill("−15s", "Skip back 15 seconds", new Runnable() {
+            @Override
+            public void run() {
+                PlaybackService service = service();
+                if (service != null) {
+                    service.skipBy(-PlaybackService.SKIP_BACK_MS);
+                }
+            }
+        }));
+        skipRow.addView(skipPill("+30s", "Skip forward 30 seconds", new Runnable() {
+            @Override
+            public void run() {
+                PlaybackService service = service();
+                if (service != null) {
+                    service.skipBy(PlaybackService.SKIP_FORWARD_MS);
+                }
+            }
+        }));
+        skipRow.setVisibility(View.GONE);
+        column.addView(skipRow);
+
         LinearLayout actions = Ui.row(host.context());
         actions.setGravity(Gravity.CENTER);
         actions.setPadding(0, Ui.dp(host.context(), 8), 0, Ui.dp(host.context(), 8));
@@ -384,6 +411,30 @@ public final class PlayerSheet {
         return image;
     }
 
+    /** Rounded text pill for the episode skip controls. */
+    private LinearLayout skipPill(String label, String description, final Runnable onClick) {
+        LinearLayout pill = Ui.row(host.context());
+        pill.setGravity(Gravity.CENTER);
+        pill.setBackground(Ui.rounded(host.context(), Theme.SURFACE_HIGH, 16f));
+        pill.setPadding(Ui.dp(host.context(), 18), Ui.dp(host.context(), 10),
+                Ui.dp(host.context(), 18), Ui.dp(host.context(), 10));
+        pill.setContentDescription(description);
+        pill.setClickable(true);
+        pill.setFocusable(true);
+        pill.addView(Ui.text(host.context(), label, 14f, Theme.TEXT, true));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.leftMargin = Ui.dp(host.context(), 8);
+        pill.setLayoutParams(params);
+        pill.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                onClick.run();
+            }
+        });
+        return pill;
+    }
+
     private LinearLayout action(String label, int icon, final Runnable onClick) {
         LinearLayout button = Ui.column(host.context());
         button.setGravity(Gravity.CENTER);
@@ -455,8 +506,10 @@ public final class PlayerSheet {
             durationLabel.setText("0:00");
             lyricBanner.setText("");
             statusLabel.setText("");
+            skipRow.setVisibility(View.GONE);
             return;
         }
+        skipRow.setVisibility(item.isEpisode() ? View.VISIBLE : View.GONE);
         if (!item.title.equals(title.getText().toString())) {
             title.setText(item.title);
         }

@@ -22,13 +22,20 @@ public final class MediaItem {
     public static final String KIND_ARTIST = "artist";
     public static final String KIND_ALBUM = "album";
     public static final String KIND_PLAYLIST = "playlist";
+    /** A podcast show: browsable, its children (returned by {@code browse}) are episodes. */
+    public static final String KIND_PODCAST = "podcast";
+    /** One podcast episode: playable like a track, with per-episode resume state. */
+    public static final String KIND_EPISODE = "episode";
 
     /** Prefix of {@link #id} for playlists that exist only in this app's library. */
     public static final String LOCAL_PLAYLIST_PREFIX = "local:";
 
     /** Provider-scoped identifier of this item. */
     public String id = "";
-    /** One of {@code KIND_TRACK}, {@code KIND_ARTIST}, {@code KIND_ALBUM}, {@code KIND_PLAYLIST}. */
+    /**
+     * One of {@code KIND_TRACK}, {@code KIND_ARTIST}, {@code KIND_ALBUM},
+     * {@code KIND_PLAYLIST}, {@code KIND_PODCAST}, {@code KIND_EPISODE}.
+     */
     public String kind = KIND_TRACK;
     public String title = "";
     public String author = "";
@@ -39,6 +46,11 @@ public final class MediaItem {
     public boolean isLive = false;
     /** Content URI of an offline copy; when set the track plays without the provider. */
     public String localUri = "";
+    /**
+     * Publish date as display text (e.g. {@code "Nov 24, 2026"}), typically for
+     * podcast episodes. Empty when the provider does not supply one.
+     */
+    public String date = "";
 
     /**
      * Lyrics availability as reported by the provider, or
@@ -85,13 +97,21 @@ public final class MediaItem {
         return KIND_PLAYLIST.equals(kind) && id.length() > 0;
     }
 
+    public boolean isPodcast() {
+        return KIND_PODCAST.equals(kind) && id.length() > 0;
+    }
+
+    public boolean isEpisode() {
+        return KIND_EPISODE.equals(kind) && id.length() > 0;
+    }
+
     public boolean isCollection() {
         return isAlbum() || isPlaylist();
     }
 
     /** Items the UI opens instead of playing. */
     public boolean isBrowsable() {
-        return isArtist() || isCollection();
+        return isArtist() || isCollection() || isPodcast();
     }
 
     public boolean isPlayable() {
@@ -137,6 +157,12 @@ public final class MediaItem {
             }
             sb.append(album);
         }
+        if (date.length() > 0) {
+            if (sb.length() > 0) {
+                sb.append("  •  ");
+            }
+            sb.append(date);
+        }
         if (durationText.length() > 0) {
             if (sb.length() > 0) {
                 sb.append("  •  ");
@@ -159,6 +185,7 @@ public final class MediaItem {
         out.isLive = isLive;
         out.localUri = localUri;
         out.lyricsState = lyricsState;
+        out.date = date;
         return out;
     }
 
@@ -175,6 +202,7 @@ public final class MediaItem {
             o.put("th", thumbnailUrl);
             o.put("live", isLive);
             o.put("local", localUri);
+            o.put("dt", date);
             if (lyricsState != null && !LyricsState.UNKNOWN.equals(lyricsState)) {
                 o.put("lyr", lyricsState);
             }
@@ -198,6 +226,7 @@ public final class MediaItem {
         m.thumbnailUrl = o.optString("th", "");
         m.isLive = o.optBoolean("live", false);
         m.localUri = o.optString("local", "");
+        m.date = o.optString("dt", "");
         m.lyricsState = LyricsState.normalize(o.optString("lyr", LyricsState.UNKNOWN));
         return m;
     }

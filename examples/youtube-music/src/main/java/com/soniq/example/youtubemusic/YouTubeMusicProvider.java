@@ -10,25 +10,38 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * Adapts the YouTube Music InnerTube client ({@link YouTubeMusicApi}) to the
- * framework's {@link MusicProvider} SPI. This is the only class the framework
- * sees; everything YouTube-specific stays behind it.
+ * Adapts two catalogues to the framework's {@link MusicProvider} SPI: the
+ * YouTube Music InnerTube client ({@link YouTubeMusicApi}) for songs, artists,
+ * albums and playlists, and the public podcast directory
+ * ({@link PublicPodcastsApi}) for podcast shows and episodes.
+ *
+ * <p>This is the only class the framework sees; everything service-specific
+ * stays behind it.
  */
 public final class YouTubeMusicProvider implements MusicProvider {
 
     public static final String ID = "youtube-music";
     public static final String MUSIC_SERVICE = "music.youtube.com";
     private static final String ORIGIN_PREFIX = "https://music.youtube.com/watch?v=";
+    /** Shown on the Podcasts tab: the catalogue behind {@link PublicPodcastsApi}. */
+    private static final String PODCAST_SOURCE = "Apple Podcasts";
 
     private final YouTubeMusicApi api;
+    private final PublicPodcastsApi podcastApi;
 
     public YouTubeMusicProvider(Context context) {
         this.api = new YouTubeMusicApi(context);
+        this.podcastApi = new PublicPodcastsApi();
     }
 
     /** Exposed for app-level settings (preferred InnerTube client) and diagnostics. */
     public YouTubeMusicApi api() {
         return api;
+    }
+
+    /** Exposed for diagnostics: the public podcast directory adapter. */
+    public PublicPodcastsApi podcastsApi() {
+        return podcastApi;
     }
 
     @Override
@@ -43,11 +56,17 @@ public final class YouTubeMusicProvider implements MusicProvider {
 
     @Override
     public String tagline() {
-        return "Streamed from YouTube Music · public access only · no sign-in";
+        return "Songs from YouTube Music · podcasts from Apple's public directory · no sign-in";
     }
 
     @Override
     public List<MediaItem> search(String query, String filter) throws IOException {
+        if (FILTER_PODCASTS.equals(filter)) {
+            // Podcasts are searched in the public Apple directory, not on
+            // YouTube; a songs search here would show music under a
+            // "Podcasts" chip. An empty query falls back to a discovery term.
+            return podcastApi.searchShows(query, 25);
+        }
         return api.search(query, modeFor(filter));
     }
 
@@ -59,15 +78,35 @@ public final class YouTubeMusicProvider implements MusicProvider {
     }
 
     @Override
+    public List<MediaItem> podcasts() throws IOException {
+        // Apple's public top-podcasts chart, so the Podcasts tab has a real
+        // starting point; featuredShows() falls back to a keyword search.
+        return podcastApi.featuredShows();
+    }
+
+    @Override
+    public String podcastSourceName() {
+        return PODCAST_SOURCE;
+    }
+
+    @Override
     public List<MediaItem> browse(MediaItem item) throws IOException {
         if (item == null) {
             throw new IOException("Nothing to browse.");
+        }
+        if (item.isPodcast()) {
+            // The show's public RSS feed is the episode list.
+            return podcastApi.episodes(item);
         }
         return item.isArtist() ? api.browseArtist(item) : api.browseCollection(item);
     }
 
     @Override
     public StreamSource resolve(MediaItem track) throws IOException {
+        if (track != null && track.isEpisode()) {
+            // An episode streams straight from the publisher's enclosure URL.
+            return podcastApi.resolve(track);
+        }
         if (track == null || track.id.length() == 0) {
             throw new IOException("This track has no video id.");
         }
@@ -81,7 +120,11 @@ public final class YouTubeMusicProvider implements MusicProvider {
 
     @Override
     public String originUrl(MediaItem track) {
-        return track != null && track.id.length() > 0 ? ORIGIN_PREFIX + track.id : "";
+        if (track == null || track.isEpisode()) {
+            // An episode is not a YouTube video, so there is no watch URL.
+            return "";
+        }
+        return track.id.length() > 0 ? ORIGIN_PREFIX + track.id : "";
     }
 
     /**

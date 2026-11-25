@@ -1,7 +1,7 @@
 # What the framework provides — and what each app must finish
 
 Soniq Base is a **backbone**. It always does the framework half of a feature and
-never pretends to do the app half. This page lists the eight capabilities that
+never pretends to do the app half. This page lists the nine capabilities that
 have a deliberately unfinished part, what the framework already handles, and the
 concrete checklist a hosting app must complete.
 
@@ -17,6 +17,7 @@ Read this before porting a new music app, and keep it in sync when you do.
 | [No lyrics vs instrumental](#6-no-lyrics-vs-instrumental) | Four-state result + cache | Provider answer (`MusicProvider.lyricsState`) |
 | [Resume where you left off](#7-resume-where-you-left-off) | Persistence, card, restore | Queue identity rules, deep links |
 | [Accessibility](#8-accessibility) | Labels, one-stop rows, contrast tokens | Screens not built by the framework, translations |
+| [Podcasts](#9-podcasts) | Kinds, tab, per-episode resume, skip controls | A provider with a podcast catalogue |
 
 A short version of this list also lives in `AGENT.md`; this file is the long form
 with code pointers. Everything below is verified by JVM tests in
@@ -209,13 +210,50 @@ announced through `contentDescription` rather than colour alone.
   4.5:1 and large text at 3:1; the default palette is chosen for that.
 - **Large fonts.** `AdaptiveUi.scaledTextSize` caps growth at 1.6× so layouts
   do not break, but any custom row must still be checked at 200 % font scale.
-- **TalkBack pass.** Run through Home → Search → Library → Settings → Player →
-  Queue with TalkBack on before shipping; the framework's own labels are only
-  as good as the custom screens around them.
+- **TalkBack pass.** Run through Home → Search → Library → Podcasts → Settings
+  → Player → Queue with TalkBack on before shipping; the framework's own labels
+  are only as good as the custom screens around them.
 
 ---
 
-## Adding a ninth capability
+## 9. Podcasts
+
+**Framework:** episodes, shows and subscriptions are first-class kinds.
+`MediaItem` gained `KIND_PODCAST` (browsable show) and `KIND_EPISODE`
+(playable) with `isPodcast()` / `isEpisode()` helpers and a publish `date`
+field; `MusicProvider` gained the `FILTER_PODCASTS` search filter and a
+browsable `podcasts()` default that returns an **empty list** when a source has
+no catalogue (never songs). `EpisodeProgress` (`data/`) persists each episode's
+position and played flag using the same guards as track resume
+(`MIN_RESUME_MS` / `END_GUARD_MS`); `PlaybackService` resumes an episode on
+prepare, records every tick, marks it played at the end guard and on completion
+(including the crossfade hand-off), and exposes `skipBy()` for the ±15 s / ±30 s
+skip pills in `PlayerSheet` — shown only while an episode is loaded. The bottom
+nav has a Podcasts tab (`Tab.PODCASTS`, `PodcastsScreen`) with in-progress
+episodes, subscribed shows (`Library.PODCASTS`) and an honestly-empty Discover
+section. Search has a "Podcasts" chip; collection sheets say "N episodes";
+`TrackRow` labels shows "SHOW"; episodes never scrobble and never seed radio.
+`SoniqMediaBrowserService` already renders shows as browse nodes via
+`isBrowsable()`, so Auto/Wear pick them up once they are in the tree.
+
+**App — the part the framework cannot do:**
+- **A provider with a podcast catalogue.** Implement `podcasts()` for the
+  Discover section, return `KIND_PODCAST` / `KIND_EPISODE` items from
+  `search(query, FILTER_PODCASTS)` and `browse(show)`, and make `resolve()`
+  play episode media ids. The YouTube Music example deliberately returns an
+  empty list for `FILTER_PODCASTS` — an honest "no catalogue" rather than songs
+  under a podcasts chip.
+- **Auto / Wear catalogue nodes.** The browse tree renders shows as nodes, but
+  surfacing a "Podcasts" root in the car is app work: override
+  `providerChildren()` / `browseProviderNode()` in your service subclass.
+- **Product decisions.** Which shows count as subscriptions across restores,
+  whether episodes appear in the Home resume card (the queue-level
+  `ResumePoint` already can), per-show auto-download, and whether "mark as
+  played" should be offered manually (the menu hook is `EpisodeProgress.markPlayed`).
+
+---
+
+## Adding a tenth capability
 
 If a new shared capability needs an app half, add it here with the same three
 columns (framework ships / app must finish / code pointers) and a row in the

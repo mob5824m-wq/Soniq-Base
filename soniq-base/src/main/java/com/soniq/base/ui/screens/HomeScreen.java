@@ -91,6 +91,12 @@ public final class HomeScreen extends Screen {
                 host.openLibrary();
             }
         }), chipParams());
+        chipRow.addView(new Chip(host.context(), "Podcasts", new Runnable() {
+            @Override
+            public void run() {
+                host.openPodcasts();
+            }
+        }), chipParams());
         chipScroll.addView(chipRow);
         container.addView(chipScroll);
 

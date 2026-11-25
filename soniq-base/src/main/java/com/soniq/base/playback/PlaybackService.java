@@ -32,6 +32,7 @@ import android.os.PowerManager;
 import android.os.SystemClock;
 
 import com.soniq.base.R;
+import com.soniq.base.data.EpisodeProgress;
 import com.soniq.base.data.ImageLoader;
 import com.soniq.base.data.Library;
 import com.soniq.base.model.MediaItem;
@@ -68,6 +69,10 @@ public final class PlaybackService extends Service {
     public static final String ACTION_MEDIA_BUTTON = "com.soniq.base.action.MEDIA_BUTTON";
 
     public static final int NOTIFICATION_ID = 4101;
+
+    /** Podcast skip distances shown as ±buttons in the player. */
+    public static final int SKIP_BACK_MS = 15_000;
+    public static final int SKIP_FORWARD_MS = 30_000;
 
     /**
      * Session token of the running service, for
@@ -150,6 +155,13 @@ public final class PlaybackService extends Service {
     private final PlaybackEngine engine = new PlaybackEngine();
     /** Persists the queue + resume point across cold starts. */
     private PlaybackSession sessionStore;
+    /** Per-episode position + played state (podcast progress). */
+    private EpisodeProgress episodeProgress;
+    /**
+     * Saved episode position to seek to once the current item prepares, or 0.
+     * Set in {@link #prepareCurrent()}, consumed by the on-prepared listener.
+     */
+    private int pendingEpisodeResume;
     /** The prepared next track, when gapless or crossfade is on. */
     private MediaPlayer nextPlayer;
     private String nextPlayerIdentity = "";
@@ -186,6 +198,7 @@ public final class PlaybackService extends Service {
         settings = new Settings(this);
         eqPreset = Math.max(0, settings.equalizerPreset());
         sessionStore = new PlaybackSession(this);
+        episodeProgress = new EpisodeProgress(this);
         applyEngineSettings();
         notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
@@ -663,6 +676,19 @@ public final class PlaybackService extends Service {
         }
     }
 
+    /**
+     * Moves the playhead by a signed delta (the player's ±15s/±30s skip
+     * buttons), clamped to {@code [0, duration]} like {@link #seekTo}.
+     */
+    public void skipBy(int deltaMs) {
+        long target = (long) getPosition() + deltaMs;
+        int duration = getDuration();
+        if (duration > 0 && target > duration) {
+            target = duration;
+        }
+        seekTo((int) Math.max(0L, target));
+    }
+
     public void setShuffle(boolean enabled) {
         queue.setShuffle(enabled);
         notifyChanged();
@@ -991,6 +1017,9 @@ public final class PlaybackService extends Service {
             notifyChanged();
             return;
         }
+        // An episode resumes where the listener left off once it prepares.
+        pendingEpisodeResume = episodeProgress != null && item.isEpisode()
+                ? episodeProgress.resumablePosition(item.identity()) : 0;
         resolving = true;
         prepared = false;
         status = "Loading " + item.title;
@@ -1318,6 +1347,17 @@ public final class PlaybackService extends Service {
                 playbackError = false;
                 status = "";
                 applyEqualizerPreset();
+                // Resume a half-heard episode before the first byte plays, so
+                // the listener never hears the cold open twice.
+                if (pendingEpisodeResume > 0) {
+                    int resumeAt = pendingEpisodeResume;
+                    pendingEpisodeResume = 0;
+                    try {
+                        mediaPlayer.seekTo(resumeAt);
+                        position.seekTo(resumeAt, SystemClock.elapsedRealtime());
+                    } catch (Exception ignored) {
+                    }
+                }
                 // Prepare the next track early so gapless/crossfade can take over.
                 main.post(new Runnable() {
                     @Override
@@ -1495,6 +1535,12 @@ public final class PlaybackService extends Service {
     }
 
     private void onTrackEnded() {
+        MediaItem ended = queue.current();
+        // Reaching the end is the natural "mark as played" moment for an
+        // episode (the ticker also marks it once inside the end guard).
+        if (ended != null && ended.isEpisode() && episodeProgress != null) {
+            episodeProgress.markPlayed(ended.identity(), true);
+        }
         if (queue.repeatMode() == PlaybackQueue.REPEAT_ONE) {
             try {
                 player.seekTo(0);
@@ -1538,6 +1584,10 @@ public final class PlaybackService extends Service {
             releaseNextPlayer();
             return false;
         }
+        // The pre-buffered player starts at position 0; an episode resumes
+        // at its saved position instead of its cold open.
+        int resumeAt = episodeProgress != null && nextItem.isEpisode()
+                ? episodeProgress.resumablePosition(nextItem.identity()) : 0;
         MediaPlayer previous = player;
         player = nextPlayer;
         nextPlayer = null;
@@ -1553,6 +1603,9 @@ public final class PlaybackService extends Service {
         status = "";
         try {
             player.setVolume(1f, 1f);
+            if (resumeAt > 0) {
+                player.seekTo(resumeAt);
+            }
             player.start();
         } catch (Exception error) {
             failCurrent(error);
@@ -1560,7 +1613,7 @@ public final class PlaybackService extends Service {
         }
         long now = SystemClock.elapsedRealtime();
         position.reset();
-        position.anchor(0, now);
+        position.anchor(resumeAt, now);
         position.setPlaying(true, now);
         attachPlayerListeners(player, generation);
         applyEqualizerPreset();
@@ -1643,6 +1696,15 @@ public final class PlaybackService extends Service {
         if (nextItem == null || !engine.isBufferReady(nextItem.identity(), true)) {
             return;
         }
+        // Pre-buffered from position 0; an episode fades in at its saved spot.
+        int resumeAt = episodeProgress != null && nextItem.isEpisode()
+                ? episodeProgress.resumablePosition(nextItem.identity()) : 0;
+        // The outgoing track's onCompletion is ignored once the player field
+        // flips, so mark a finished episode here instead of in onTrackEnded.
+        MediaItem fading = queue.current();
+        if (fading != null && fading.isEpisode() && episodeProgress != null) {
+            episodeProgress.markPlayed(fading.identity(), true);
+        }
         crossfading = true;
         final MediaPlayer outgoing = player;
         final MediaPlayer incoming = nextPlayer;
@@ -1656,6 +1718,9 @@ public final class PlaybackService extends Service {
         endingHandled = true;
         try {
             incoming.setVolume(0f, 0f);
+            if (resumeAt > 0) {
+                incoming.seekTo(resumeAt);
+            }
             incoming.start();
         } catch (Exception error) {
             // Put the world back the way we found it and let the track end normally.
@@ -1670,7 +1735,7 @@ public final class PlaybackService extends Service {
         queue.playAt(queue.indexOf(nextItem));
         long now = SystemClock.elapsedRealtime();
         position.reset();
-        position.anchor(0, now);
+        position.anchor(resumeAt, now);
         position.setPlaying(true, now);
         attachPlayerListeners(incoming, generation);
         applyEqualizerPreset();
@@ -1782,6 +1847,11 @@ public final class PlaybackService extends Service {
         ResumePoint point = ResumePoint.of(item, getPosition(), getDuration(),
                 System.currentTimeMillis());
         sessionStore.saveResumePoint(point);
+        // The same tick feeds the per-episode store (position + played flag).
+        if (episodeProgress != null && item.isEpisode()) {
+            episodeProgress.record(item, getPosition(), getDuration(),
+                    System.currentTimeMillis());
+        }
     }
 
     /** Persists the queue and position; called on pause, track change and stop. */

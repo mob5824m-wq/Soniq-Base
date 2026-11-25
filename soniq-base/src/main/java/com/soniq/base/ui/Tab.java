@@ -7,6 +7,7 @@ public enum Tab {
     HOME("Home", R.drawable.soniq_ic_home),
     SEARCH("Search", R.drawable.soniq_ic_search),
     LIBRARY("Library", R.drawable.soniq_ic_library),
+    PODCASTS("Podcasts", R.drawable.soniq_ic_podcast),
     SETTINGS("Settings", R.drawable.soniq_ic_settings);
 
     public final String label;

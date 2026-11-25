@@ -31,6 +31,8 @@ public final class CollectionSheet {
     private final LinearLayout tracksContainer;
     private final NetworkImage cover;
     private final List<MediaItem> tracks = new ArrayList<>();
+    /** The browsable being shown; drives "tracks" vs "episodes" wording. */
+    private MediaItem rootItem;
     private int request;
     private Future<?> browseTask;
 
@@ -147,6 +149,7 @@ public final class CollectionSheet {
             browseTask = null;
         }
         root.setVisibility(View.VISIBLE);
+        rootItem = item;
         titleView.setText(item.title);
         subtitleView.setText(item.subtitle());
         cover.load(item.bestThumb());
@@ -196,10 +199,15 @@ public final class CollectionSheet {
         if (currentRequest != request) {
             return;
         }
-        statusView.setText(tracks.size() + (tracks.size() == 1 ? " track" : " tracks"));
+        boolean podcastRoot = rootItem != null && rootItem.isPodcast();
+        statusView.setText(tracks.size()
+                + (podcastRoot ? (tracks.size() == 1 ? " episode" : " episodes")
+                : (tracks.size() == 1 ? " track" : " tracks")));
         tracksContainer.removeAllViews();
         if (tracks.isEmpty()) {
-            statusView.setText("No playable tracks were returned.");
+            statusView.setText(podcastRoot
+                    ? "No playable episodes were returned."
+                    : "No playable tracks were returned.");
             return;
         }
         for (int i = 0; i < tracks.size(); i++) {
@@ -211,7 +219,7 @@ public final class CollectionSheet {
                         public void onClick(MediaItem clicked, int position) {
                             if (clicked.isArtist()) {
                                 host.openArtist(clicked);
-                            } else if (clicked.isCollection()) {
+                            } else if (clicked.isCollection() || clicked.isPodcast()) {
                                 host.openCollection(clicked);
                             } else {
                                 host.play(tracks, index);

@@ -13,7 +13,7 @@ import com.soniq.base.ui.Tab;
 import com.soniq.base.ui.Theme;
 import com.soniq.base.ui.Ui;
 
-/** Four-destination bottom navigation with a pill highlight. */
+/** Five-destination bottom navigation with a pill highlight. */
 public final class BottomNav extends LinearLayout {
 
     public interface Listener {
