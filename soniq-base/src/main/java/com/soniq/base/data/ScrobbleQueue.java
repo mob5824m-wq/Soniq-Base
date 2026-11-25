@@ -138,6 +138,12 @@ public final class ScrobbleQueue {
         if (item == null) {
             return;
         }
+        // Podcasts are not music listens: never announce or scrobble them.
+        // flush() still runs so a queued song listen is not held up by one.
+        if (item.isEpisode()) {
+            flush();
+            return;
+        }
         if (!item.identity().equals(currentKey)) {
             trackChanged(item);
         } else if (playedMs == 0L) {
@@ -256,6 +262,10 @@ public final class ScrobbleQueue {
      */
     public void playbackTick(MediaItem item, long deltaMs, long durationMs) {
         if (item == null) {
+            return;
+        }
+        // Episodes accumulate no listen time — podcast listening stays local.
+        if (item.isEpisode()) {
             return;
         }
         if (!item.identity().equals(currentKey)) {

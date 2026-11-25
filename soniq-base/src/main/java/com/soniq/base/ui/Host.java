@@ -56,6 +56,9 @@ public interface Host {
 
     void openLibrary();
 
+    /** Opens the Podcasts tab (shows, episodes and subscriptions). */
+    void openPodcasts();
+
     void openSearch(String query);
 
     void showQueue();

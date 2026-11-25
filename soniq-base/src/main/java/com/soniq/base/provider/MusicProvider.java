@@ -26,6 +26,13 @@ public interface MusicProvider {
     String FILTER_ARTISTS = "artists";
     String FILTER_ALBUMS = "albums";
     String FILTER_PLAYLISTS = "playlists";
+    /**
+     * Podcast shows for search (only meaningful for providers with a podcast
+     * catalogue). Returns shows — browsable {@link MediaItem#KIND_PODCAST}
+     * items; the framework opens one via {@link #browse(MediaItem)} to list
+     * its episodes ({@link MediaItem#KIND_EPISODE}).
+     */
+    String FILTER_PODCASTS = "podcasts";
 
     /** Stable identifier, e.g. {@code "youtube-music"}. Used for diagnostics only. */
     String id();
@@ -39,16 +46,18 @@ public interface MusicProvider {
     }
 
     /**
-     * Searches the catalogue. Results may mix tracks, artists, albums and
-     * playlists; the framework routes each by {@link MediaItem#isBrowsable()}.
+     * Searches the catalogue. Results may mix tracks, artists, albums,
+     * playlists and (for podcast-capable providers) shows; the framework
+     * routes each by {@link MediaItem#isBrowsable()}.
      *
      * @param filter one of the {@code FILTER_*} constants
      */
     List<MediaItem> search(String query, String filter) throws IOException;
 
     /**
-     * Children of an artist, album or playlist. Artists may return a mix of
-     * albums and tracks; albums and playlists return tracks.
+     * Children of an artist, album, playlist or podcast show. Artists may
+     * return a mix of albums and tracks; albums and playlists return tracks;
+     * podcast shows return episodes ({@link MediaItem#KIND_EPISODE}).
      */
     List<MediaItem> browse(MediaItem item) throws IOException;
 
@@ -70,6 +79,28 @@ public interface MusicProvider {
      */
     default List<MediaItem> radio(MediaItem seed) throws IOException {
         return Collections.emptyList();
+    }
+
+    /**
+     * Optional: podcast shows to feature on the Podcasts tab — a discovery
+     * list such as "trending" or "featured". The default returns nothing and
+     * the framework shows an honest empty state; providers without a podcast
+     * catalogue should keep the default. Subscriptions are stored locally by
+     * the framework and do not go through this method.
+     */
+    default List<MediaItem> podcasts() throws IOException {
+        return Collections.emptyList();
+    }
+
+    /**
+     * Optional: what to call the podcast catalogue on the Podcasts tab. Only
+     * differs from {@link #displayName()} for a provider that plays music from
+     * one service and public podcasts from another, so the tab does not credit
+     * the music service for shows it never served. Defaults to the display
+     * name, which is right for a single-catalogue provider.
+     */
+    default String podcastSourceName() {
+        return displayName();
     }
 
     /**

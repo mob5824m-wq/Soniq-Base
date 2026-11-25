@@ -36,6 +36,7 @@ import com.soniq.base.ui.screens.CollectionSheet;
 import com.soniq.base.ui.screens.HomeScreen;
 import com.soniq.base.ui.screens.LibraryScreen;
 import com.soniq.base.ui.screens.PlayerSheet;
+import com.soniq.base.ui.screens.PodcastsScreen;
 import com.soniq.base.ui.screens.QueueSheet;
 import com.soniq.base.ui.screens.RecapSheet;
 import com.soniq.base.ui.screens.Screen;
@@ -88,6 +89,7 @@ public class MusicActivity extends android.app.Activity implements Host {
     private HomeScreen homeScreen;
     private SearchScreen searchScreen;
     private LibraryScreen libraryScreen;
+    private PodcastsScreen podcastsScreen;
     private SettingsScreen settingsScreen;
     private Screen currentScreen;
     private Tab tab = Tab.HOME;
@@ -241,6 +243,9 @@ public class MusicActivity extends android.app.Activity implements Host {
         }
         if (libraryScreen != null) {
             libraryScreen.release();
+        }
+        if (podcastsScreen != null) {
+            podcastsScreen.release();
         }
         if (settingsScreen != null) {
             settingsScreen.release();
@@ -412,6 +417,11 @@ public class MusicActivity extends android.app.Activity implements Host {
                     libraryScreen = new LibraryScreen(this);
                 }
                 return libraryScreen;
+            case PODCASTS:
+                if (podcastsScreen == null) {
+                    podcastsScreen = new PodcastsScreen(this);
+                }
+                return podcastsScreen;
             case SETTINGS:
                 if (settingsScreen == null) {
                     settingsScreen = new SettingsScreen(this);
@@ -627,6 +637,11 @@ public class MusicActivity extends android.app.Activity implements Host {
     }
 
     @Override
+    public void openPodcasts() {
+        switchTab(Tab.PODCASTS);
+    }
+
+    @Override
     public void openSearch(String query) {
         switchTab(Tab.SEARCH);
         if (searchScreen != null && query != null && query.trim().length() > 0) {
@@ -642,6 +657,29 @@ public class MusicActivity extends android.app.Activity implements Host {
     @Override
     public void showTrackMenu(final MediaItem item) {
         if (item == null) {
+            return;
+        }
+        if (item.isPodcast()) {
+            // A show is "saved" by subscribing, which lives in its own list.
+            final boolean subscribed = library.contains(Library.PODCASTS, item);
+            String[] options = {subscribed ? "Unsubscribe" : "Subscribe", "Open"};
+            new AlertDialog.Builder(this)
+                    .setTitle(item.title)
+                    .setItems(options, new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            if (which == 0) {
+                                boolean now = library.toggle(Library.PODCASTS, item);
+                                showToast(now ? "Subscribed to " + item.title
+                                        : "Unsubscribed from " + item.title);
+                                refreshCurrentScreen();
+                            } else {
+                                openCollection(item);
+                            }
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
             return;
         }
         if (item.isBrowsable()) {
@@ -885,6 +923,13 @@ public class MusicActivity extends android.app.Activity implements Host {
         if (item == null) {
             return;
         }
+        if (item.isPodcast()) {
+            boolean subscribed = library.toggle(Library.PODCASTS, item);
+            showToast(subscribed ? "Subscribed to " + item.title
+                    : "Unsubscribed from " + item.title);
+            refreshCurrentScreen();
+            return;
+        }
         if (item.isBrowsable()) {
             String key = item.isArtist() ? Library.ARTISTS : Library.COLLECTIONS;
             boolean saved = library.toggle(key, item);
@@ -989,6 +1034,11 @@ public class MusicActivity extends android.app.Activity implements Host {
         if (item == null) {
             return;
         }
+        if (item.isEpisode()) {
+            // Radio is a music concept; an episode is not a sensible seed.
+            showToast("Radio isn't available for podcast episodes.");
+            return;
+        }
         showToast("Building radio from " + item.title + "…");
         io.execute(new Runnable() {
             @Override
@@ -1008,7 +1058,7 @@ public class MusicActivity extends android.app.Activity implements Host {
                         if (seedItem == null) {
                             continue;
                         }
-                        if (!seedItem.isBrowsable()
+                        if (!seedItem.isBrowsable() && !seedItem.isEpisode()
                                 && !seedItem.identity().equals(item.identity())) {
                             radio.add(seedItem);
                         }

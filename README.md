@@ -134,20 +134,24 @@ read for failures. Implementations must be safe to call from several threads.
 | --- | --- | --- |
 | `String id()` | yes | Stable identifier for diagnostics, e.g. `"youtube-music"`. |
 | `String displayName()` | yes | Human-readable name shown in the UI. |
-| `List<MediaItem> search(String query, String filter)` | yes | `filter` is one of `FILTER_SONGS` / `FILTER_ARTISTS` / `FILTER_ALBUMS` / `FILTER_PLAYLISTS` (treat unknown values as songs). Results may mix kinds; the framework routes each by `MediaItem.isBrowsable()`. |
-| `List<MediaItem> browse(MediaItem item)` | yes | Children of an artist, album or playlist. Artists may return a mix of albums and tracks; albums and playlists return tracks. |
+| `List<MediaItem> search(String query, String filter)` | yes | `filter` is one of `FILTER_SONGS` / `FILTER_ARTISTS` / `FILTER_ALBUMS` / `FILTER_PLAYLISTS` / `FILTER_PODCASTS` (treat unknown values as songs; return an empty list for `FILTER_PODCASTS` when you have no podcast catalogue). Results may mix kinds; the framework routes each by `MediaItem.isBrowsable()`. |
+| `List<MediaItem> browse(MediaItem item)` | yes | Children of an artist, album, playlist or podcast show. Artists may return a mix of albums and tracks; albums, playlists and shows return playable items (tracks / episodes). |
 | `StreamSource resolve(MediaItem track)` | yes | A directly playable URL for a track: `url` plus optional `headers`, `mimeType`, `hls` flag, `bitrate`, `sourceLabel`, and corrected `title` / `author` / `album` / `artworkUrl` / `durationSec`. |
 | `List<MediaItem> quickPicks()` | no | Tracks for the Home screen. Default: a `"popular music"` song search. |
+| `List<MediaItem> podcasts()` | no | Podcast shows for the Podcasts tab's Discover section. Default: an empty list (the framework never invents a catalogue). |
+| `String podcastSourceName()` | no | What the Podcasts tab calls the podcast catalogue, when it differs from `displayName()` (a provider serving music and podcasts from different sources). Default: `displayName()`. |
 | `List<MediaItem> radio(MediaItem seed)` | no | A mix seeded by a track. Default: the framework falls back to a title search. |
 | `String musicService()` | no | ListenBrainz `music_service` domain (e.g. `"music.youtube.com"`). |
 | `String originUrl(MediaItem track)` | no | Per-track ListenBrainz `origin_url`. |
 | `String tagline()` | no | One line shown under the Home heading. |
 
-**`MediaItem`** is the universal model for tracks, artists, albums and
-playlists: `id`, `kind` (`KIND_TRACK` / `KIND_ARTIST` / `KIND_ALBUM` /
-`KIND_PLAYLIST`), `title`, `author`, `album`, `durationText`, `durationSec`,
+**`MediaItem`** is the universal model for tracks, artists, albums, playlists
+and podcasts: `id`, `kind` (`KIND_TRACK` / `KIND_ARTIST` / `KIND_ALBUM` /
+`KIND_PLAYLIST` / `KIND_PODCAST` / `KIND_EPISODE`), `title`, `author`, `album`,
+`date` (publish date display text), `durationText`, `durationSec`,
 `thumbnailUrl`, `isLive`, and `localUri` for offline copies. A track is
-anything with an `id` that is not browsable. Ids are opaque to the framework
+anything with an `id` that is not browsable; a podcast show is browsable and an
+episode is playable. Ids are opaque to the framework
 and must be stable: the library, downloads and play queue persist
 `kind + ":" + id`.
 
@@ -234,7 +238,7 @@ existing tag, and prints the Actions and release URLs. Needs Python 3.8+.
   publish. The same workflow runs; if the changelog has no section for it, the
   release gets auto-generated notes and the assets are attached to it.
 
-## The example app: YouTube Music
+## The example app: YouTube Music and public podcasts
 
 `examples/youtube-music` is a standalone YouTube Music client built on the
 library: search (songs, artists, albums, playlists), browse, audio-only
@@ -242,12 +246,42 @@ playback through the public InnerTube endpoints, radio, deep links and
 ListenBrainz scrobbling with `music.youtube.com` origins. It is **not** the
 product of this repository — it demonstrates the SPI and seeds your own app.
 
+It also plays **public podcasts**, which shows how one provider can serve two
+catalogues behind a single SPI (songs from YouTube, shows from Apple's public
+directory, and `podcastSourceName()` names the second one):
+
+- **Apple's iTunes Search API** (`itunes.apple.com/search`, no key, no account)
+  finds shows by keyword and returns each show's public RSS `feedUrl`. The
+  Podcasts tab's Discover list starts from Apple's public top-podcasts chart
+  and falls back to a keyword search if the chart is unavailable.
+- **Each show's own RSS feed** is its episode list: titles, publish dates,
+  durations and artwork come from the feed as published. Only items with an
+  audio `<enclosure>` are listed, so no row is a dead end.
+- **Episodes stream straight from the enclosure URL** — nothing is proxied,
+  re-hosted or downloaded first. Plain `http://` feeds and enclosures are
+  refused with an explanation, because the example ships
+  `usesCleartextTraffic="false"`.
 - **No sign-in.** Public endpoints only; age-restricted, members-only or
   region-locked videos refuse to play, and the reason is shown as text.
 - **No stream-signature deciphering.** If Google changes the player response
   enough that audio URLs can no longer be read directly, playback breaks until
   `YouTubeMusicApi` is updated.
 - **No bypass of age/member/region restrictions.** This is intentional.
+
+### If the example crashes
+
+Release builds are minified, so the stack trace is the only useful clue.
+
+```bash
+adb logcat -b crash -d | tail -100
+```
+
+With no cable attached, `ExampleApp` installs an uncaught-exception handler that
+also writes the same trace to
+`Android/data/com.soniq.example.youtubemusic/files/last-crash.txt` — open it with
+any file manager and attach it to an issue. Release builds also ship
+`examples/youtube-music/proguard-rules.pro`, which keeps the app's entry points
+and the framework's class names while still shrinking.
 
 ## Project layout
 
@@ -256,19 +290,20 @@ soniq-base/                        the framework (Android library, com.soniq.bas
   src/main/java/com/soniq/base/
     SoniqApp.java                  Application base: createProvider()
     provider/MusicProvider.java    the SPI an app implements
-    model/MediaItem.java           track / artist / album / playlist model + JSON
+    model/MediaItem.java           track / artist / album / playlist / podcast /
+                                   episode model + JSON
     model/StreamSource.java        resolved stream: url, headers, mime, corrected meta
-    data/                          Library, Settings, Downloads, LyricsApi/Parser/
-                                   Repository, ImageLoader, ListenBrainzApi,
-                                   ScrobbleQueue, ScrobblePolicy, Scrobble,
-                                   ListeningRecap/Api, SearchHistory, NetworkPolicy,
-                                   LibrarySort
+    data/                          Library, EpisodeProgress, Settings, Downloads,
+                                   LyricsApi/Parser/Repository, ImageLoader,
+                                   ListenBrainzApi, ScrobbleQueue, ScrobblePolicy,
+                                   Scrobble, ListeningRecap/Api, SearchHistory,
+                                   NetworkPolicy, LibrarySort
     playback/                      PlaybackService, PlaybackQueue, PlaybackPosition,
                                    PlaybackEngine (crossfade/gapless), PlaybackSession,
                                    ResumePoint, SoniqWidgetProvider,
                                    SoniqMediaBrowserService, MediaButtonReceiver
     ui/                            MusicActivity, Host, Theme, Ui, A11y, AdaptiveUi,
-                                   views/, screens/
+                                   views/, screens/ (incl. Podcasts)
   src/main/res/                    strings (soniq_ prefix), colours, Theme.SoniqBase
   src/test/                        JVM unit tests
 examples/youtube-music/            reference app (com.soniq.example.youtubemusic)
@@ -276,7 +311,9 @@ examples/youtube-music/            reference app (com.soniq.example.youtubemusic
                                    the framework sees
   YouTubeMusicApi.java             search / browse / stream resolution + parsing
   InnerTubeClient.java             HTTP, client table, visitor data
-  ExampleApp.java, MainActivity.java
+  PublicPodcastsApi.java           iTunes Search + RSS feeds → shows and episodes
+  ExampleApp.java                  provider wiring + last-crash.txt handler
+  MainActivity.java                the activity: MusicActivity
 docs/PORTING.md                    history: Kobo Arc 7 Freedom → this framework
 CHANGELOG.md                       Keep a Changelog; [Unreleased] feeds the next release
 scripts/release.py                 changelog → commit → vX.Y.Z tag → push (see Releases)

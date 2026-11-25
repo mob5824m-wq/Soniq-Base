@@ -22,6 +22,8 @@ public final class Library {
     public static final String COLLECTIONS = "collections";
     public static final String RECENT = "recent";
     public static final String PLAYLISTS = "playlists_index";
+    /** Subscribed podcast shows ({@link MediaItem#KIND_PODCAST}). */
+    public static final String PODCASTS = "podcasts";
 
     private static final int MAX_LIST = 200;
     private static final int MAX_RECENT = 30;

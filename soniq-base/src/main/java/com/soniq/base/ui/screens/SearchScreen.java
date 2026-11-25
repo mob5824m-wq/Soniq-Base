@@ -26,14 +26,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Future;
 
-/** Catalogue search with song / artist / album / playlist filters. */
+/** Catalogue search with song / artist / album / playlist / podcast filters. */
 public final class SearchScreen extends Screen {
 
     private static final String[][] MODES = {
             {"Songs", MusicProvider.FILTER_SONGS},
             {"Artists", MusicProvider.FILTER_ARTISTS},
             {"Albums", MusicProvider.FILTER_ALBUMS},
-            {"Playlists", MusicProvider.FILTER_PLAYLISTS}
+            {"Playlists", MusicProvider.FILTER_PLAYLISTS},
+            {"Podcasts", MusicProvider.FILTER_PODCASTS}
     };
 
     private final List<MediaItem> results = new ArrayList<>();
@@ -77,8 +78,8 @@ public final class SearchScreen extends Screen {
         searchBox.addView(searchIcon, iconParams);
 
         input = new EditText(host.context());
-        input.setHint("Songs, artists, albums, playlists…");
-        input.setContentDescription("Search songs, artists, albums, or playlists");
+        input.setHint("Songs, artists, albums, playlists, podcasts…");
+        input.setContentDescription("Search songs, artists, albums, playlists, or podcasts");
         input.setHintTextColor(Theme.TEXT_FAINT);
         input.setTextColor(Theme.TEXT);
         input.setTextSize(14f);
@@ -361,7 +362,7 @@ public final class SearchScreen extends Screen {
             resultsContainer.addView(Ui.emptyState(host.context(),
                     "No results yet",
                     query.length() == 0
-                            ? "Search for a song, artist, album or playlist."
+                            ? "Search for a song, artist, album, playlist or podcast."
                             : "Nothing matched this filter. Try Songs or another spelling."));
             return;
         }
@@ -374,7 +375,7 @@ public final class SearchScreen extends Screen {
                         public void onClick(MediaItem clicked, int position) {
                             if (clicked.isArtist()) {
                                 host.openArtist(clicked);
-                            } else if (clicked.isCollection()) {
+                            } else if (clicked.isCollection() || clicked.isPodcast()) {
                                 host.openCollection(clicked);
                             } else {
                                 host.play(results, index);
@@ -384,7 +385,11 @@ public final class SearchScreen extends Screen {
                         @Override
                         public void onMore(android.view.View anchor,
                                             MediaItem clicked, int position) {
-                            if (clicked.isBrowsable()) {
+                            if (clicked.isPodcast()) {
+                                // A show is saved by subscribing: offer the menu
+                                // rather than silently toggling the subscription.
+                                host.showTrackMenu(clicked);
+                            } else if (clicked.isBrowsable()) {
                                 host.addToPlaylist(clicked);
                             } else {
                                 host.showTrackMenu(clicked);
@@ -393,11 +398,7 @@ public final class SearchScreen extends Screen {
 
                         @Override
                         public void onLongClick(MediaItem clicked, int position) {
-                            if (clicked.isBrowsable()) {
-                                host.addToPlaylist(clicked);
-                            } else {
-                                host.addToPlaylist(clicked);
-                            }
+                            host.addToPlaylist(clicked);
                         }
                     }));
         }

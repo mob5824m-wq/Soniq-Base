@@ -124,6 +124,9 @@ public final class TrackRow extends LinearLayout {
         if (item.isArtist()) {
             return "ARTIST";
         }
+        if (item.isPodcast()) {
+            return "SHOW";
+        }
         if (item.isCollection()) {
             return "OPEN";
         }

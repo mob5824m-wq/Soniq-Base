@@ -8,6 +8,51 @@ All notable changes to Soniq Base are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Podcasts (example half): real public podcasts.** `examples/youtube-music`
+  now answers `FILTER_PODCASTS`, `podcasts()` and `browse()` of a show with the
+  public Apple directory instead of an empty list, so the Podcasts tab and the
+  Podcasts search chip return real shows and their episodes play
+  (`PublicPodcastsApi`): the iTunes Search API finds shows (no key, no account)
+  and returns each show's RSS `feedUrl`, the feed lists the episodes, and the
+  episode's `<enclosure>` URL is the audio, streamed straight from the
+  publisher. Discover starts from Apple's public top-podcasts chart with a
+  keyword-search fallback; episodes without audio are dropped rather than
+  listed; plain `http://` feeds and enclosures are refused with a readable
+  message (the example ships `usesCleartextTraffic="false"`); episodes still
+  never scrobble. Search → More on a show now opens the track menu
+  (Subscribe / Open) instead of silently toggling the subscription.
+- **`MusicProvider.podcastSourceName()`** — the Podcasts tab names the podcast
+  catalogue rather than the music service, for a provider that serves the two
+  from different places (the example: songs from YouTube, podcasts from Apple's
+  directory). Defaults to `displayName()`.
+- **A crash log for the example.** `ExampleApp` installs an
+  uncaught-exception handler that also writes the trace to
+  `Android/data/com.soniq.example.youtubemusic/files/last-crash.txt`, since a
+  minified release build with no adb attached otherwise leaves nothing to read.
+- **`examples/youtube-music/proguard-rules.pro`** — the release build now keeps
+  the app's entry points and the framework's class names while still shrinking.
+- **Podcasts (framework half).** Episodes, shows and subscriptions are
+  first-class kinds: `MediaItem` gained `KIND_PODCAST` / `KIND_EPISODE` with
+  `isPodcast()` / `isEpisode()` helpers and a publish `date` field, and
+  `MusicProvider` gained `FILTER_PODCASTS` plus a browsable `podcasts()` default
+  (empty when a source has no catalogue — never mapped to songs).
+  - **New bottom-nav Podcasts tab** (`Tab.PODCASTS`, `Host.openPodcasts()`)
+    with `PodcastsScreen`: continue listening to in-progress episodes
+    (resume position shown per row), subscribed shows from `Library.PODCASTS`
+    (Subscribe / Unsubscribe lives in the track menu), and an honestly-empty
+    Discover section when the provider offers no podcasts.
+  - **Per-episode playback depth** — `EpisodeProgress` persists each episode's
+    position and played flag (position-based resume reuses the track guards
+    `MIN_RESUME_MS` / `END_GUARD_MS`; played marks are sticky); `PlaybackService`
+    resumes on prepare, records every tick, marks episodes played at the end
+    guard and on completion (including the crossfade hand-off), and gained
+    `skipBy()` backing new ±15 s / ±30 s skip pills in the player, shown only
+    for episodes.
+  - **Search** gained a "Podcasts" filter chip; collection sheets say
+    "N episodes" for shows; `TrackRow` labels shows "SHOW"; Home gained a
+    "Podcasts" chip. Episodes never scrobble (`ScrobbleQueue` ignores them) and
+    cannot seed radio. Auto / Wear pick shows up as browse
+  nodes automatically via `isBrowsable()`.
 - **Backbone capabilities, with the app half documented.** Eight capabilities
   that every music app needs are now provided as a framework half plus a
   written, per-app finishing checklist in [`docs/WIDGETS.md`](docs/WIDGETS.md)
